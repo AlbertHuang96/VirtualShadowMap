@@ -9,7 +9,7 @@ layout (location = 0) in vec2 inUV;
 
 layout (location = 0) out vec4 outFragColor;
 
-#define LIGHT_COUNT 3
+#define LIGHT_COUNT 1
 #define SHADOW_FACTOR 0.25
 #define AMBIENT_LIGHT 0.1
 #define USE_PCF

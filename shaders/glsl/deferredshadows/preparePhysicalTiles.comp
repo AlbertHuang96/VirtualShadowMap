@@ -1,0 +1,170 @@
+#version 450
+
+// This extension is required to use printf
+#extension GL_EXT_debug_printf : enable
+
+#define TILE_COUNT 128
+#define LIGHT_COUNT 1
+
+//layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+// invocation dim
+layout(local_size_x = 32, local_size_y = 32, local_size_z = 1) in;
+
+//shared uint count;
+
+struct VirtualTile 
+{
+	int flag;
+};
+
+// Binding
+layout (binding = 0) buffer VirtualTiles
+{
+	VirtualTile virtualTiles[];
+};
+
+struct Light 
+{
+	vec4 position;
+	vec4 target;
+	vec4 color;
+	mat4 viewMatrix;
+};
+
+layout (binding = 1) uniform uboLights 
+{
+	vec4 viewPos;
+	Light lights[LIGHT_COUNT];
+	int useShadows;
+	int debugDisplayTarget;
+} uboLight;
+
+//camera
+layout (binding = 2) uniform uboCompute0 
+{
+	mat4 invViewProj;
+} ubo;
+
+struct UsedVirtualTile
+{
+	mat4 virtualTileViewProj;
+};
+
+layout (binding = 3) buffer UsedVirtualTileMatrices
+{
+	UsedVirtualTile tiles[];
+	//mat4 matrices[];
+};
+
+layout (binding = 4) buffer VirtualTileTable
+{
+	int count;
+	int id[TILE_COUNT * TILE_COUNT];
+} table;
+
+void main()
+{
+    ivec2 id = ivec2(gl_GlobalInvocationID.xy);
+	//debugPrintfEXT("gl_GlobalInvocationID.x = %d gl_GlobalInvocationID.y = %d\n", gl_GlobalInvocationID.x, gl_GlobalInvocationID.y);
+    int index = id.y * TILE_COUNT + id.x;
+	//debugPrintfEXT("index = %d\n", index);
+	if (index == 0)
+	{
+	//     // clear the ssbo in the first invocation 
+	// 	// the old cull.comp use this
+	// 	// the new cull use vkCmdFillBuffer in the cmdbuffer to clear I guess
+		atomicExchange(table.count, 0);
+	// 	for (uint i = 0; i < TILE_COUNT * TILE_COUNT; i++)
+	// 	{
+	// 		atomicExchange(table.id[i], -1);
+	// 	}
+	}
+
+	//ivec2 idworkgroup = ivec2(gl_WorkGroupID.xy);
+	//debugPrintfEXT("gl_WorkGroupID.x = %d gl_WorkGroupID.y = %d\n", gl_WorkGroupID.x, gl_WorkGroupID.y);
+
+	//uint idx = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * gl_NumWorkGroups.x * gl_WorkGroupSize.x;
+	//debugPrintfEXT("idx = %d\n", idx);
+	//if (idx == 0)
+	//{
+	//	atomicExchange(table.count, 0);
+	//}
+
+	//atomicAdd(table.count, 1);
+
+	//atomicAdd(table.count, 1);
+	//table.id[index] = table.count;
+
+	//return;
+
+    //if (index == TILE_COUNT * TILE_COUNT)
+	//{
+    //    return;
+    //}
+
+	table.id[index] = -1;
+
+	barrier(); // to store the value as the index order though the performance may be affected
+	memoryBarrier();
+
+    int flag = virtualTiles[index].flag;
+	//int flag2 = 0;
+	//atomicExchange(virtualTiles[index].flag, flag2);
+	//debugPrintfEXT("flag = %d\n", flag);
+
+	//ssbo coherent?
+	// barrier; mem barrier?
+    if (flag == 1)
+    {
+		debugPrintfEXT("index = %d\n", index);
+        atomicAdd(table.count, 1);
+		//barrier();
+		//memoryBarrier();
+
+		//atomicAdd(count, 1);
+		//barrier();
+		//memoryBarrier();
+
+		// atomicExchange(table.count, 0);
+
+		// for (int i = 0; i < index; i++)
+		// {
+		// 	if (virtualTiles[index].flag == 1)
+		// 	{
+		// 		// atomicAdd use for shader storage block member or shared member
+		// 		atomicAdd(table.count, 1);
+		// 	}
+		// }
+
+		int count = 0;
+		for (int i = 0; i <= index; i++)
+		{
+			if (virtualTiles[i].flag == 1)
+			{
+				count = count + 1;
+			}
+		}
+		debugPrintfEXT("count = %d\n", count);
+
+		table.id[index] = count - 1;
+
+		// the atomic counter table.count here doesnt work to store in the id table
+		// as many threads are writing to it at the same time
+		// reading its value could get a wrong number
+		//table.id[index] = table.count;
+		//atomicExchange(table.id[index], table.count);
+
+		//atomicExchange(table.count, 0);
+
+		barrier();
+		memoryBarrier();
+		
+		//table.id[index] = int(count);
+		//table.id[index] = table.count;
+
+		//barrier();
+		//memoryBarrier();
+
+		//atomicExchange(table.id[index], table.count);
+    }
+}

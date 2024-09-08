@@ -13,13 +13,34 @@
 #include "VulkanglTFModel.h"
 
 // Must match the LIGHT_COUNT define in the shadow and deferred shaders
-#define LIGHT_COUNT 3
+#define LIGHT_COUNT 1
+
+// VSM settings
+//  the whole virtual shadow map size will be about 16k*16k (w * h = 128*128 * 128*128)
+// tile num 
+#define TILE_COUNT 128
+// total num of tile will be 128*128
+// 
+// tile dim
+#define TILE_DIM 128
+// one tile size will be 128*128
+
+// physical tile num = 16 * 16
+// physical image size = 16 * 16 * (128 * 128)
+#define PHYSICAL_TILE_COUNT 16
+
 
 class VulkanExample : public VulkanExampleBase
 {
 public:
 	int32_t debugDisplayTarget = 0;
 	bool enableShadows = true;
+
+	// Virtual shadow map
+	bool enableDynamicLighting = false;
+	bool enableVirtualShadowMap = true;
+	bool enablePerTileFrustumCulling = false;
+	bool enableMultiViewExtension = false;
 
 	// Keep depth range as small as possible
 	// for better shadow map precision
@@ -77,7 +98,12 @@ public:
 		int32_t debugDisplayTarget = 0;
 	} uniformDataComposition;
 
+	struct UniformDataCompute0 {
+		glm::mat4 invViewProj;
+	} uniformDataCompute0;
+
 	struct {
+		vks::Buffer ubCompute0;
 		vks::Buffer offscreen;
 		vks::Buffer composition;
 		vks::Buffer shadowGeometryShader;
@@ -98,6 +124,74 @@ public:
 	} descriptorSets;
 
 	VkDescriptorSetLayout descriptorSetLayout{ VK_NULL_HANDLE };
+
+	// ---------------------------VSM-------------------------------
+	// VSM ssbo
+	vks::Buffer virtualTileFlagBuffer;
+	vks::Buffer virtualTileTableBuffer;
+
+	vks::Buffer usedVirtualTileMatrixBuffer;
+
+	//TODO layout flag 1 bit, id 8 bit (0-255)
+	// 
+	// ssbo member struct
+	// layout of the struct
+	// std430
+	struct VirtualTile 
+	{
+		// glm::ivec2/4
+		int flag;
+		//int id;
+	};
+
+	struct VirtualTileTable
+	{
+		int count;
+		int id[TILE_COUNT * TILE_COUNT];
+	} virtualTileTable;
+
+	struct UsedVirtualTileViewProj
+	{
+		glm::mat4 virtualTileViewProj;
+	};
+
+	struct {
+		VkQueue queue;								// Separate queue for compute commands (queue family may differ from the one used for graphics)
+		VkCommandPool commandPool;					// Use a separate command pool (queue family may differ from the one used for graphics)
+		VkCommandBuffer commandBuffer;				// Command buffer storing the dispatch commands and barriers
+		VkFence fence;								// Synchronization fence to avoid rewriting compute CB if still in use
+		VkSemaphore semaphore;						//  ---- here to sync for shadow pass and compute pass
+		VkDescriptorSetLayout descriptorSetLayout;	// Compute shader binding layout
+		VkDescriptorSet descriptorSet;				// Compute shader bindings
+		VkPipelineLayout pipelineLayout;			// Layout of the compute pipeline
+		VkPipeline pipeline;						// Compute pipeline for updating particle positions
+	} computeMarkUsedVirtualTiles;
+
+	struct {
+		VkQueue queue;								// Separate queue for compute commands (queue family may differ from the one used for graphics)
+		VkCommandPool commandPool;					// Use a separate command pool (queue family may differ from the one used for graphics)
+		VkCommandBuffer commandBuffer;				// Command buffer storing the dispatch commands and barriers
+		VkFence fence;								// Synchronization fence to avoid rewriting compute CB if still in use
+		VkSemaphore semaphore;						// Used as a wait semaphore for graphics submission
+		VkDescriptorSetLayout descriptorSetLayout;	// Compute shader binding layout
+		VkDescriptorSet descriptorSet;				// Compute shader bindings
+		VkPipelineLayout pipelineLayout;			// Layout of the compute pipeline
+		VkPipeline pipeline;						// Compute pipeline for updating particle positions
+	} computePreparePhysicalTiles;
+
+	struct {
+		VkQueue queue;								// Separate queue for compute commands (queue family may differ from the one used for graphics)
+		VkCommandPool commandPool;					// Use a separate command pool (queue family may differ from the one used for graphics)
+		VkCommandBuffer commandBuffer;				// Command buffer storing the dispatch commands and barriers
+		VkFence fence;								// Synchronization fence to avoid rewriting compute CB if still in use
+		VkSemaphore semaphore;						// Used as a wait semaphore for graphics submission
+		VkDescriptorSetLayout descriptorSetLayout;	// Compute shader binding layout
+		VkDescriptorSet descriptorSet;				// Compute shader bindings
+		VkPipelineLayout pipelineLayout;			// Layout of the compute pipeline
+		VkPipeline pipeline;						// Compute pipeline for updating particle positions
+	} computePerTileFrustumCulling;
+	
+	// -------------------VSM--------------------------
 
 	struct {
 		// Framebuffer resources for the deferred pass
@@ -125,6 +219,8 @@ public:
 		camera.setRotation(glm::vec3(-0.75f, 12.5f, 0.0f));
 		camera.setPerspective(60.0f, (float)width / (float)height, zNear, zFar);
 		timerSpeed *= 0.25f;
+
+		enabledDeviceExtensions.push_back(VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME);
 	}
 
 	~VulkanExample()
@@ -200,8 +296,8 @@ public:
 		frameBuffers.shadow->width = 1024;
 		frameBuffers.shadow->height = 1024;
 #else
-		frameBuffers.shadow->width = 2048;
-		frameBuffers.shadow->height = 2048;
+		frameBuffers.shadow->width = 512;
+		frameBuffers.shadow->height = 512;
 #endif
 
 		// Find a suitable depth format
@@ -385,6 +481,97 @@ public:
 		textures.background.normalMap.loadFromFile(getAssetPath() + "textures/stonefloor02_normal_rgba.ktx", VK_FORMAT_R8G8B8A8_UNORM, vulkanDevice, queue);
 	}
 
+	void buildMarkUsedVirtualTileCommandBuffer()
+	{
+		VkCommandBufferBeginInfo cmdBufInfo = vks::initializers::commandBufferBeginInfo();
+
+		VK_CHECK_RESULT(vkBeginCommandBuffer(computeMarkUsedVirtualTiles.commandBuffer, &cmdBufInfo));
+
+		// Compute particle movement
+
+		// GBuffer pass depth -> mark used virtual tile compute pass
+		// need barrier for depth writing?
+		// need semaphore
+		// 
+		// Add memory barrier to ensure that the (graphics) vertex shader has fetched attributes before compute starts to write to the buffer
+		/*if (graphics.queueFamilyIndex != compute.queueFamilyIndex)
+		{
+			VkBufferMemoryBarrier buffer_barrier =
+			{
+				VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+				nullptr,
+				0,
+				VK_ACCESS_SHADER_WRITE_BIT,
+				graphics.queueFamilyIndex,
+				compute.queueFamilyIndex,
+				storageBuffer.buffer,
+				0,
+				storageBuffer.size
+			};
+
+			vkCmdPipelineBarrier(
+				compute.commandBuffer,
+				VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+				VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+				0,
+				0, nullptr,
+				1, &buffer_barrier,
+				0, nullptr);
+		}*/
+
+		// Dispatch the compute job
+		vkCmdBindPipeline(computeMarkUsedVirtualTiles.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computeMarkUsedVirtualTiles.pipeline);
+		vkCmdBindDescriptorSets(computeMarkUsedVirtualTiles.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computeMarkUsedVirtualTiles.pipelineLayout, 0, 1, &computeMarkUsedVirtualTiles.descriptorSet, 0, 0);
+		// dim = gbuffer depth map
+		//vkCmdDispatch(compute.commandBuffer, PARTICLE_COUNT / 256, 1, 1);
+		vkCmdDispatch(computeMarkUsedVirtualTiles.commandBuffer, frameBuffers.shadow->width, frameBuffers.shadow->height, 1);
+
+		// Add barrier to ensure that compute shader has finished writing to the buffer
+		// Without this the (rendering) vertex shader may display incomplete results (partial data from last frame)
+		/*if (graphics.queueFamilyIndex != compute.queueFamilyIndex)
+		{
+			VkBufferMemoryBarrier buffer_barrier =
+			{
+				VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+				nullptr,
+				VK_ACCESS_SHADER_WRITE_BIT,
+				0,
+				compute.queueFamilyIndex,
+				graphics.queueFamilyIndex,
+				storageBuffer.buffer,
+				0,
+				storageBuffer.size
+			};
+
+			vkCmdPipelineBarrier(
+				compute.commandBuffer,
+				VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+				VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+				0,
+				0, nullptr,
+				1, &buffer_barrier,
+				0, nullptr);
+		}*/
+
+		vkEndCommandBuffer(computeMarkUsedVirtualTiles.commandBuffer);
+	}
+
+	void buildPreparePhysicalTilesCommandBuffer()
+	{
+		VkCommandBufferBeginInfo cmdBufInfo = vks::initializers::commandBufferBeginInfo();
+
+		VK_CHECK_RESULT(vkBeginCommandBuffer(computePreparePhysicalTiles.commandBuffer, &cmdBufInfo));
+
+		// Dispatch the compute job
+		vkCmdBindPipeline(computePreparePhysicalTiles.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePreparePhysicalTiles.pipeline);
+		vkCmdBindDescriptorSets(computePreparePhysicalTiles.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePreparePhysicalTiles.pipelineLayout, 0, 1, &computePreparePhysicalTiles.descriptorSet, 0, 0);
+		
+		// invocation dim = local size = 32
+		vkCmdDispatch(computePreparePhysicalTiles.commandBuffer, TILE_COUNT / 32, TILE_COUNT / 32, 1);
+
+		vkEndCommandBuffer(computePreparePhysicalTiles.commandBuffer);
+	}
+
 	void buildCommandBuffers()
 	{
 		VkCommandBufferBeginInfo cmdBufInfo = vks::initializers::commandBufferBeginInfo();
@@ -435,11 +622,22 @@ public:
 	void setupDescriptors()
 	{
 		// Pool
+		/*std::vector<VkDescriptorPoolSize> poolSizes = {
+			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 18),
+			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16),
+			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3)
+		};*/
+
+		// TODO reuse; dynamic/bindless
 		std::vector<VkDescriptorPoolSize> poolSizes = {
-			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 12),
-			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16)
+			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 60), // 30
+			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 20),
+			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 10) // 4
 		};
-		VkDescriptorPoolCreateInfo descriptorPoolInfo =vks::initializers::descriptorPoolCreateInfo(poolSizes, 4);
+
+		VkDescriptorPoolCreateInfo descriptorPoolInfo =vks::initializers::descriptorPoolCreateInfo(poolSizes, 8);
+		//descriptorPoolInfo.maxSets ??
+
 		VK_CHECK_RESULT(vkCreateDescriptorPool(device, &descriptorPoolInfo, nullptr, &descriptorPool));
 
 		// Layout
@@ -649,6 +847,10 @@ public:
 		uniformDataOffscreen.instancePos[0] = glm::vec4(0.0f);
 		uniformDataOffscreen.instancePos[1] = glm::vec4(-7.0f, 0.0, -4.0f, 0.0f);
 		uniformDataOffscreen.instancePos[2] = glm::vec4(4.0f, 0.0, -6.0f, 0.0f);
+
+		VK_CHECK_RESULT(vulkanDevice->createBuffer(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &uniformBuffers.ubCompute0, sizeof(UniformDataCompute0)));
+		VK_CHECK_RESULT(uniformBuffers.ubCompute0.map());
+
 	}
 
 	void updateUniformBufferOffscreen()
@@ -657,6 +859,13 @@ public:
 		uniformDataOffscreen.view = camera.matrices.view;
 		uniformDataOffscreen.model = glm::mat4(1.0f);
 		memcpy(uniformBuffers.offscreen.mapped, &uniformDataOffscreen, sizeof(uniformDataOffscreen));
+	}
+
+	void updateUniformBufferCompute0()
+	{
+		uniformDataCompute0.invViewProj = glm::inverse(camera.matrices.perspective * camera.matrices.view);
+
+		memcpy(uniformBuffers.ubCompute0.mapped, &uniformDataCompute0, sizeof(uniformDataCompute0));
 	}
 
 	Light initLight(glm::vec3 pos, glm::vec3 target, glm::vec3 color)
@@ -671,26 +880,41 @@ public:
 	void initLights()
 	{
 		uniformDataComposition.lights[0] = initLight(glm::vec3(-14.0f, -0.5f, 15.0f), glm::vec3(-2.0f, 0.0f, 0.0f), glm::vec3(1.0f, 0.5f, 0.5f));
-		uniformDataComposition.lights[1] = initLight(glm::vec3(14.0f, -4.0f, 12.0f), glm::vec3(2.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-		uniformDataComposition.lights[2] = initLight(glm::vec3(0.0f, -10.0f, 4.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(1.0f, 1.0f, 1.0f));
+		//uniformDataComposition.lights[1] = initLight(glm::vec3(14.0f, -4.0f, 12.0f), glm::vec3(2.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+		//uniformDataComposition.lights[2] = initLight(glm::vec3(0.0f, -10.0f, 4.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(1.0f, 1.0f, 1.0f));
 	}
 
 	// Update deferred composition fragment shader light position and parameters uniform block
 	void updateUniformBufferDeferred()
 	{
 		// Animate
-		uniformDataComposition.lights[0].position.x = -14.0f + std::abs(sin(glm::radians(timer * 360.0f)) * 20.0f);
-		uniformDataComposition.lights[0].position.z = 15.0f + cos(glm::radians(timer *360.0f)) * 1.0f;
+		if (enableDynamicLighting)
+		{
+			uniformDataComposition.lights[0].position.x = -14.0f + std::abs(sin(glm::radians(timer * 360.0f)) * 20.0f);
+			uniformDataComposition.lights[0].position.z = 15.0f + cos(glm::radians(timer * 360.0f)) * 1.0f;
+		}
+		else
+		{
+			// -14 + [0, 20] = [-14, 6]
+			//uniformDataComposition.lights[0].position.x = -14.0f + std::abs(sin(glm::radians(timer * 360.0f)) * 20.0f);
+			uniformDataComposition.lights[0].position.x = -4.0f;
+			uniformDataComposition.lights[0].position.z = 15.0f;
+		}
 
-		uniformDataComposition.lights[1].position.x = 14.0f - std::abs(sin(glm::radians(timer * 360.0f)) * 2.5f);
-		uniformDataComposition.lights[1].position.z = 13.0f + cos(glm::radians(timer *360.0f)) * 4.0f;
+		//uniformDataComposition.lights[1].position.x = 14.0f - std::abs(sin(glm::radians(timer * 360.0f)) * 2.5f);
+		//uniformDataComposition.lights[1].position.z = 13.0f + cos(glm::radians(timer *360.0f)) * 4.0f;
 
-		uniformDataComposition.lights[2].position.x = 0.0f + sin(glm::radians(timer *360.0f)) * 4.0f;
-		uniformDataComposition.lights[2].position.z = 4.0f + cos(glm::radians(timer *360.0f)) * 2.0f;
+		//uniformDataComposition.lights[2].position.x = 0.0f + sin(glm::radians(timer *360.0f)) * 4.0f;
+		//uniformDataComposition.lights[2].position.z = 4.0f + cos(glm::radians(timer *360.0f)) * 2.0f;
 
-		for (uint32_t i = 0; i < LIGHT_COUNT; i++) {
+		for (uint32_t i = 0; i < LIGHT_COUNT; i++) 
+		{
 			// mvp from light's pov (for shadows)
-			glm::mat4 shadowProj = glm::perspective(glm::radians(lightFOV), 1.0f, zNear, zFar);
+			//glm::mat4 shadowProj = glm::perspective(glm::radians(lightFOV), 1.0f, zNear, zFar);
+			// 
+			//tmp otho proj and the shadows should be parallel
+			glm::mat4 shadowProj = glm::ortho(-10.0f, 10.0f, -10.0f, 10.0f, zNear, zFar);
+
 			glm::mat4 shadowView = glm::lookAt(glm::vec3(uniformDataComposition.lights[i].position), glm::vec3(uniformDataComposition.lights[i].target), glm::vec3(0.0f, 1.0f, 0.0f));
 			glm::mat4 shadowModel = glm::mat4(1.0f);
 
@@ -707,18 +931,322 @@ public:
 		memcpy(uniformBuffers.composition.mapped, &uniformDataComposition, sizeof(uniformDataComposition));
 	}
 
+	// --------------------------VSM--------------------------------------------
+	void prepareStorageBuffers()
+	{
+		// whole size of SSBO = 128 * 128 * 72 = 1179648
+		// 128 * 128 * 4
+		std::vector<VirtualTile> virtualTileBuffer(TILE_COUNT * TILE_COUNT);
+		for (auto& VirtualTile : virtualTileBuffer) 
+		{
+			VirtualTile.flag = -1;
+			//VirtualTile.id   = -1;
+			//VirtualTile.viewProj = glm::mat4(1);
+		}
+
+		VkDeviceSize storageBufferSize = virtualTileBuffer.size() * sizeof(VirtualTile);
+
+		// Staging
+		// SSBO won't be changed on the host after upload so copy to device local memory
+
+		vks::Buffer stagingBuffer;
+
+		vulkanDevice->createBuffer(
+			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			&stagingBuffer,
+			storageBufferSize,
+			virtualTileBuffer.data());
+
+		vulkanDevice->createBuffer(
+			// The SSBO will be used as a storage buffer for the compute pipeline
+			VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+			&virtualTileFlagBuffer,
+			storageBufferSize);
+
+		vulkanDevice->copyBuffer(&stagingBuffer, &virtualTileFlagBuffer, queue);
+
+		stagingBuffer.destroy();
+
+		//std::vector<VirtualTile> virtualTileTableBuffer(TILE_COUNT * TILE_COUNT);
+		/*for (auto& id : virtualTileTable.id)
+		{
+			id = -1;
+		}*/
+
+		memset(&virtualTileTable, -1, sizeof(virtualTileTable));
+		//virtualTileTable.count = 0;
+
+		VkDeviceSize storageBufferSize3 = sizeof(virtualTileTable);
+
+		// Staging
+		// SSBO won't be changed on the host after upload so copy to device local memory
+
+		vks::Buffer stagingBuffer3;
+
+		//virtualTileTable.id
+		vulkanDevice->createBuffer(
+			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			&stagingBuffer3,
+			storageBufferSize3,
+			&virtualTileTable);
+
+		vulkanDevice->createBuffer(
+			// The SSBO will be used as a storage buffer for the compute pipeline
+			VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+			&virtualTileTableBuffer,
+			storageBufferSize3);
+
+		vulkanDevice->copyBuffer(&stagingBuffer3, &virtualTileTableBuffer, queue);
+
+		stagingBuffer3.destroy();
+
+
+		std::vector<UsedVirtualTileViewProj> matrixBuffer(PHYSICAL_TILE_COUNT * PHYSICAL_TILE_COUNT);
+		for (auto& usedVirtualTileViewProj : matrixBuffer)
+		{
+			usedVirtualTileViewProj.virtualTileViewProj = glm::mat4(1.0f);
+		}
+
+		VkDeviceSize storageBufferSize2 = matrixBuffer.size() * sizeof(UsedVirtualTileViewProj);
+
+		// Staging
+		// SSBO won't be changed on the host after upload so copy to device local memory
+
+		vks::Buffer stagingBuffer2;
+
+		vulkanDevice->createBuffer(
+			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			&stagingBuffer2,
+			storageBufferSize2,
+			matrixBuffer.data());
+
+		vulkanDevice->createBuffer(
+			VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+			&usedVirtualTileMatrixBuffer,
+			storageBufferSize2);
+
+		vulkanDevice->copyBuffer(&stagingBuffer2, &usedVirtualTileMatrixBuffer, queue);
+
+		stagingBuffer2.destroy();
+	}
+
+	void prepareComputeMarkUsedVirtualTiles()
+	{
+		// Create a compute capable device queue
+		// The VulkanDevice::createLogicalDevice functions finds a compute capable queue and prefers queue families that only support compute
+		// Depending on the implementation this may result in different queue family indices for graphics and computes,
+		// requiring proper synchronization (see the memory and pipeline barriers)
+		vkGetDeviceQueue(device, vulkanDevice->queueFamilyIndices.compute, 0, &computeMarkUsedVirtualTiles.queue);
+
+		// Create compute pipeline
+		// Compute pipelines are created separate from graphics pipelines even if they use the same queue (family index)
+
+		VkDescriptorImageInfo texDescriptorShadowMap =
+			vks::initializers::descriptorImageInfo(
+				frameBuffers.shadow->sampler,
+				frameBuffers.shadow->attachments[0].view,
+				VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+
+		std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings = {
+			// Binding 0 : 
+			vks::initializers::descriptorSetLayoutBinding(
+				VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+				VK_SHADER_STAGE_COMPUTE_BIT,
+				0),
+			vks::initializers::descriptorSetLayoutBinding(
+				VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+				VK_SHADER_STAGE_COMPUTE_BIT,
+				1),
+			vks::initializers::descriptorSetLayoutBinding(
+				VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+				VK_SHADER_STAGE_COMPUTE_BIT,
+				2),
+			vks::initializers::descriptorSetLayoutBinding(
+				VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+				VK_SHADER_STAGE_COMPUTE_BIT,
+				3)
+		};
+		VkDescriptorSetLayoutCreateInfo descriptorLayout = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
+		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &computeMarkUsedVirtualTiles.descriptorSetLayout));
+
+		VkDescriptorSetAllocateInfo allocInfo = vks::initializers::descriptorSetAllocateInfo(descriptorPool, &computeMarkUsedVirtualTiles.descriptorSetLayout, 1);
+		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &computeMarkUsedVirtualTiles.descriptorSet));
+		std::vector<VkWriteDescriptorSet> computeWriteDescriptorSets = {
+			// Binding 0 : 
+			vks::initializers::writeDescriptorSet(
+				computeMarkUsedVirtualTiles.descriptorSet,
+				VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+				0,
+				&virtualTileFlagBuffer.descriptor),
+			vks::initializers::writeDescriptorSet(
+				computeMarkUsedVirtualTiles.descriptorSet,
+				VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+				1,
+				&uniformBuffers.composition.descriptor),
+			vks::initializers::writeDescriptorSet(
+				computeMarkUsedVirtualTiles.descriptorSet,
+				VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+				2,
+				&uniformBuffers.ubCompute0.descriptor),
+			vks::initializers::writeDescriptorSet(
+				computeMarkUsedVirtualTiles.descriptorSet,
+				VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+				3,
+				&texDescriptorShadowMap)
+			
+		};
+		vkUpdateDescriptorSets(device, static_cast<uint32_t>(computeWriteDescriptorSets.size()), computeWriteDescriptorSets.data(), 0, NULL);
+
+		// Create pipeline
+		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = vks::initializers::pipelineLayoutCreateInfo(&computeMarkUsedVirtualTiles.descriptorSetLayout, 1);
+		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &computeMarkUsedVirtualTiles.pipelineLayout));
+		VkComputePipelineCreateInfo computePipelineCreateInfo = vks::initializers::computePipelineCreateInfo(computeMarkUsedVirtualTiles.pipelineLayout, 0);
+		computePipelineCreateInfo.stage = loadShader(getShadersPath() + "deferredshadows/markUsedVirtualTiles.comp.spv", VK_SHADER_STAGE_COMPUTE_BIT);
+		VK_CHECK_RESULT(vkCreateComputePipelines(device, pipelineCache, 1, &computePipelineCreateInfo, nullptr, &computeMarkUsedVirtualTiles.pipeline));
+		//VkPhysicalDeviceLimits::maxComputeWorkGroupInvocations 1024= 32*32
+
+		// Separate command pool as queue family for compute may be different than graphics
+		VkCommandPoolCreateInfo cmdPoolInfo = {};
+		cmdPoolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+		cmdPoolInfo.queueFamilyIndex = vulkanDevice->queueFamilyIndices.compute;
+		cmdPoolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+		VK_CHECK_RESULT(vkCreateCommandPool(device, &cmdPoolInfo, nullptr, &computeMarkUsedVirtualTiles.commandPool));
+
+		// Create a command buffer for compute operations
+		computeMarkUsedVirtualTiles.commandBuffer = vulkanDevice->createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, computeMarkUsedVirtualTiles.commandPool);
+
+		// Semaphore for compute & graphics sync
+		VkSemaphoreCreateInfo semaphoreCreateInfo = vks::initializers::semaphoreCreateInfo();
+		VK_CHECK_RESULT(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &computeMarkUsedVirtualTiles.semaphore));
+
+		// Build a single command buffer containing the compute dispatch commands
+		//buildComputeCommandBuffer();
+	}
+
+	void preparePreparePhysicalTiles()
+	{
+		// Create a compute capable device queue
+		// The VulkanDevice::createLogicalDevice functions finds a compute capable queue and prefers queue families that only support compute
+		// Depending on the implementation this may result in different queue family indices for graphics and computes,
+		// requiring proper synchronization (see the memory and pipeline barriers)
+		vkGetDeviceQueue(device, vulkanDevice->queueFamilyIndices.compute, 0, &computePreparePhysicalTiles.queue);
+
+		// Create compute pipeline
+		// Compute pipelines are created separate from graphics pipelines even if they use the same queue (family index)
+
+		// need 2 ssbo, 2 ubo for now
+		std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings = {
+			// Binding 0 : 
+			vks::initializers::descriptorSetLayoutBinding(
+				VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+				VK_SHADER_STAGE_COMPUTE_BIT,
+				0),
+			vks::initializers::descriptorSetLayoutBinding(
+				VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+				VK_SHADER_STAGE_COMPUTE_BIT,
+				1),
+			vks::initializers::descriptorSetLayoutBinding(
+				VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+				VK_SHADER_STAGE_COMPUTE_BIT,
+				2),
+			vks::initializers::descriptorSetLayoutBinding(
+				VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+				VK_SHADER_STAGE_COMPUTE_BIT,
+				3),
+			vks::initializers::descriptorSetLayoutBinding(
+				VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+				VK_SHADER_STAGE_COMPUTE_BIT,
+				4),
+		};
+		VkDescriptorSetLayoutCreateInfo descriptorLayout = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
+		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &computePreparePhysicalTiles.descriptorSetLayout));
+
+		VkDescriptorSetAllocateInfo allocInfo = vks::initializers::descriptorSetAllocateInfo(descriptorPool, &computePreparePhysicalTiles.descriptorSetLayout, 1);
+		VK_CHECK_RESULT(vkAllocateDescriptorSets(device, &allocInfo, &computePreparePhysicalTiles.descriptorSet));
+		std::vector<VkWriteDescriptorSet> computeWriteDescriptorSets = {
+			// Binding 0 : 
+			vks::initializers::writeDescriptorSet(
+				computePreparePhysicalTiles.descriptorSet,
+				VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+				0,
+				&virtualTileFlagBuffer.descriptor),
+			vks::initializers::writeDescriptorSet(
+				computePreparePhysicalTiles.descriptorSet,
+				VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+				1,
+				&uniformBuffers.composition.descriptor),
+			vks::initializers::writeDescriptorSet(
+				computePreparePhysicalTiles.descriptorSet,
+				VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+				2,
+				&uniformBuffers.ubCompute0.descriptor),
+			vks::initializers::writeDescriptorSet(
+				computePreparePhysicalTiles.descriptorSet,
+				VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+				3,
+				&usedVirtualTileMatrixBuffer.descriptor),
+			vks::initializers::writeDescriptorSet(
+				computePreparePhysicalTiles.descriptorSet,
+				VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+				4,
+				&virtualTileTableBuffer.descriptor)
+
+		};
+		vkUpdateDescriptorSets(device, static_cast<uint32_t>(computeWriteDescriptorSets.size()), computeWriteDescriptorSets.data(), 0, NULL);
+
+		// Create pipeline
+		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = vks::initializers::pipelineLayoutCreateInfo(&computePreparePhysicalTiles.descriptorSetLayout, 1);
+		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &computePreparePhysicalTiles.pipelineLayout));
+		VkComputePipelineCreateInfo computePipelineCreateInfo = vks::initializers::computePipelineCreateInfo(computePreparePhysicalTiles.pipelineLayout, 0);
+		computePipelineCreateInfo.stage = loadShader(getShadersPath() + "deferredshadows/preparePhysicalTiles.comp.spv", VK_SHADER_STAGE_COMPUTE_BIT);
+		VK_CHECK_RESULT(vkCreateComputePipelines(device, pipelineCache, 1, &computePipelineCreateInfo, nullptr, &computePreparePhysicalTiles.pipeline));
+		//VkPhysicalDeviceLimits::maxComputeWorkGroupInvocations 1024= 32*32
+
+		// Separate command pool as queue family for compute may be different than graphics
+		VkCommandPoolCreateInfo cmdPoolInfo = {};
+		cmdPoolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+		cmdPoolInfo.queueFamilyIndex = vulkanDevice->queueFamilyIndices.compute;
+		cmdPoolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+		VK_CHECK_RESULT(vkCreateCommandPool(device, &cmdPoolInfo, nullptr, &computePreparePhysicalTiles.commandPool));
+
+		// Create a command buffer for compute operations
+		computePreparePhysicalTiles.commandBuffer = vulkanDevice->createCommandBuffer(VK_COMMAND_BUFFER_LEVEL_PRIMARY, computePreparePhysicalTiles.commandPool);
+
+		// Semaphore for compute & graphics sync
+		VkSemaphoreCreateInfo semaphoreCreateInfo = vks::initializers::semaphoreCreateInfo();
+		VK_CHECK_RESULT(vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &computePreparePhysicalTiles.semaphore));
+
+		// Build a single command buffer containing the compute dispatch commands
+		//buildComputeCommandBuffer();
+	}
+
 	void prepare()
 	{
 		VulkanExampleBase::prepare();
 		loadAssets();
+		prepareStorageBuffers();
 		deferredSetup();
 		shadowSetup();
 		initLights();
 		prepareUniformBuffers();
 		setupDescriptors();
+		
 		preparePipelines();
 		buildCommandBuffers();
 		buildDeferredCommandBuffer();
+		
+		prepareComputeMarkUsedVirtualTiles();
+		buildMarkUsedVirtualTileCommandBuffer();
+
+		preparePreparePhysicalTiles();
+		buildPreparePhysicalTilesCommandBuffer();
+		
 		prepared = true;
 	}
 
@@ -740,10 +1268,45 @@ public:
 		submitInfo.pCommandBuffers = &offScreenCmdBuffer;
 		VK_CHECK_RESULT(vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE));
 
+		if (enableVirtualShadowMap)
+		{
+			VkPipelineStageFlags waitStageMask = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+
+			// Submit compute commands
+			VkSubmitInfo computeSubmitInfo = vks::initializers::submitInfo();
+			computeSubmitInfo.commandBufferCount = 1;
+			computeSubmitInfo.pCommandBuffers = &computeMarkUsedVirtualTiles.commandBuffer;
+			computeSubmitInfo.waitSemaphoreCount = 1;
+			computeSubmitInfo.pWaitSemaphores = &offscreenSemaphore;
+			computeSubmitInfo.pWaitDstStageMask = &waitStageMask;
+			computeSubmitInfo.signalSemaphoreCount = 1;
+			computeSubmitInfo.pSignalSemaphores = &computeMarkUsedVirtualTiles.semaphore;
+
+			// submit compute work of mark used virtual tiles
+			VK_CHECK_RESULT(vkQueueSubmit(computeMarkUsedVirtualTiles.queue, 1, &computeSubmitInfo, VK_NULL_HANDLE));
+
+			// submit compute work of prepare physical tiles
+			
+			waitStageMask = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+
+			// Submit compute commands
+			computeSubmitInfo = vks::initializers::submitInfo();
+			computeSubmitInfo.commandBufferCount = 1;
+			computeSubmitInfo.pCommandBuffers = &computePreparePhysicalTiles.commandBuffer;
+			computeSubmitInfo.waitSemaphoreCount = 1;
+			computeSubmitInfo.pWaitSemaphores = &computeMarkUsedVirtualTiles.semaphore;
+			computeSubmitInfo.pWaitDstStageMask = &waitStageMask;
+			computeSubmitInfo.signalSemaphoreCount = 1;
+			computeSubmitInfo.pSignalSemaphores = &computePreparePhysicalTiles.semaphore;
+
+			// submit compute work of mark used virtual tiles
+			VK_CHECK_RESULT(vkQueueSubmit(computePreparePhysicalTiles.queue, 1, &computeSubmitInfo, VK_NULL_HANDLE));
+		}
+
 		// Scene rendering
 
 		// Wait for offscreen semaphore
-		submitInfo.pWaitSemaphores = &offscreenSemaphore;
+		submitInfo.pWaitSemaphores = &computePreparePhysicalTiles.semaphore;//offscreenSemaphore
 		// Signal ready with render complete semaphore
 		submitInfo.pSignalSemaphores = &semaphores.renderComplete;
 
@@ -760,6 +1323,7 @@ public:
 			return;
 		updateUniformBufferDeferred();
 		updateUniformBufferOffscreen();
+		updateUniformBufferCompute0();
 		draw();
 	}
 
@@ -770,6 +1334,28 @@ public:
 			bool shadows = (uniformDataComposition.useShadows == 1);
 			if (overlay->checkBox("Shadows", &shadows)) {
 				uniformDataComposition.useShadows = shadows;
+			}
+
+			if (overlay->header("VSM Settings"))
+			{
+				
+				if (overlay->checkBox("VirtualShadowMap", &enableVirtualShadowMap)) 
+				{
+					
+				}
+				if (overlay->checkBox("EnableDynamicLighting", &enableDynamicLighting))
+				{
+
+				}
+				if (overlay->checkBox("PerTileFrustumCulling", &enablePerTileFrustumCulling))
+				{
+
+				}
+				if (overlay->checkBox("MultiViewExtension", &enableMultiViewExtension))
+				{
+
+				}
+				
 			}
 		}
 	}

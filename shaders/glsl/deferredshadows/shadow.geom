@@ -1,6 +1,6 @@
 #version 450
 
-#define LIGHT_COUNT 3
+#define LIGHT_COUNT 1
 
 layout (triangles, invocations = LIGHT_COUNT) in;
 layout (triangle_strip, max_vertices = 3) out;

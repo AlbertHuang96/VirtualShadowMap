@@ -1,0 +1,127 @@
+
+#version 450
+
+//layout(local_size_x = 32, local_size_y = 32, local_size_z = 1) in;
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+#define LIGHT_COUNT 1
+
+struct VirtualTile 
+{
+	int flag;
+	//int id;
+	//mat4 viewProj;
+};
+
+// Binding 1:
+layout (binding = 0, std430) buffer VirtualTiles
+{
+	VirtualTile virtualTiles[];
+};
+
+struct Light 
+{
+	vec4 position;
+	vec4 target;
+	vec4 color;
+	mat4 viewMatrix;
+};
+
+layout (binding = 1) uniform uboLights 
+{
+	vec4 viewPos;
+	Light lights[LIGHT_COUNT];
+	int useShadows;
+	int debugDisplayTarget;
+} uboLight;
+
+//camera
+layout (binding = 2) uniform uboCompute0 
+{
+	mat4 invViewProj;
+} ubo;
+
+layout (binding = 3) uniform sampler2DArray samplerShadowMap;
+
+vec3 computeWorldPosition(vec2 uv, float depth)
+{
+    vec4 pos;
+    pos.w = 1.0;
+    pos.z = depth * 2 - 1.0;
+    pos.xy = uv * 2 - 1.0;
+    //mat4 invViewProj = inverse(ubo.projection * ubo.view);
+    //vec4 worldPos = invViewProj * pos;
+    vec4 worldPos = ubo.invViewProj * pos;
+    return worldPos.xyz / worldPos.w;
+}
+
+void main()
+{
+    uint idx = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * gl_NumWorkGroups.x * gl_WorkGroupSize.x;
+	
+	// if (idx == 0)
+	// {
+	//     for (uint i = 0; i < 512 * 512; i++)
+	//     {
+	//         //atomicExchange(virtualTiles[i].id, 0);
+	//     }
+	// }
+
+    //barrier();
+	//memoryBarrier();
+
+    //ivec2 id = ivec2(gl_LocalInvocationID.xy);
+    ivec3 texDim = textureSize(samplerShadowMap, 0);
+    //vec2 uv = vec2(id.x / float(texDim.x), id.y / float(texDim.y));
+    //
+    ivec2 id = ivec2(gl_GlobalInvocationID.xy);
+    vec2 uv = vec2(id.x / float(texDim.x), id.y / float(texDim.y));
+
+    for(int i = 0; i < LIGHT_COUNT; ++i)
+    {
+        // for each light, iterate each pixel and get the depth
+        float depth = texture(samplerShadowMap, vec3(uv, i)).r;
+        vec3 worldPos = computeWorldPosition(uv, depth);
+
+        vec4 shaodwClipPos = uboLight.lights[i].viewMatrix * vec4(worldPos, 1.0f);
+        shaodwClipPos.xyz = shaodwClipPos.xyz / shaodwClipPos.w;
+
+        bool bShaodwInClip = shaodwClipPos.w > 0.0f && 
+            (shaodwClipPos.x >= -1.0f && shaodwClipPos.x <= 1.0f) &&
+            (shaodwClipPos.y >= -1.0f && shaodwClipPos.y <= 1.0f) &&
+            (shaodwClipPos.z >=  0.0f && shaodwClipPos.z <= 1.0f);
+        if(!bShaodwInClip)
+        {
+            return;
+        }
+
+        vec2 uvShadow = 0.5 * (shaodwClipPos.xy + 1.0f);
+        
+        // floor Side note: The return value is of type floating scalar or float vector 
+        //although the result of the operation is an integer.
+        float indexTmp = floor(uvShadow.y * 128) * 128 + floor(uvShadow.x * 128);
+        
+        //GLSL casting a float to an int automatically floors it (at least in any implementation I've ever seen)
+        int index = int(indexTmp);
+         if (index == 16384)
+        {
+            // uvShadow.y == 1.0f
+            return;
+        }
+
+        //barrier();
+		//memoryBarrier();
+
+        //virtualTiles[index].flag = 1;
+        atomicExchange(virtualTiles[index].flag, 1);
+
+        barrier();
+		memoryBarrier();
+
+        //atomicAdd(virtualTiles[index].id, 1);
+
+        //barrier();
+		//memoryBarrier();
+        //atomicAdd(virtualTiles[index].flag, 1);
+    }
+}
