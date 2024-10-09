@@ -1,12 +1,15 @@
 #version 450
 
-layout (binding = 1) uniform sampler2D shadowMap;
+layout (set = 0, binding = 1) uniform sampler2D shadowMap;
+
+layout (set = 1, binding = 0) uniform sampler2D colorMap;
 
 layout (location = 0) in vec3 inNormal;
-layout (location = 1) in vec3 inColor;
+//layout (location = 1) in vec3 inColor;
 layout (location = 2) in vec3 inViewVec;
 layout (location = 3) in vec3 inLightVec;
 layout (location = 4) in vec4 inShadowCoord;
+layout (location = 5) in vec2 inUV;
 
 layout (constant_id = 0) const int enablePCF = 0;
 
@@ -53,13 +56,14 @@ float filterPCF(vec4 sc)
 
 void main() 
 {	
+	vec3 color = texture(colorMap, inUV).rgb;
 	float shadow = (enablePCF == 1) ? filterPCF(inShadowCoord / inShadowCoord.w) : textureProj(inShadowCoord / inShadowCoord.w, vec2(0.0));
 
 	vec3 N = normalize(inNormal);
 	vec3 L = normalize(inLightVec);
 	vec3 V = normalize(inViewVec);
 	vec3 R = normalize(-reflect(L, N));
-	vec3 diffuse = max(dot(N, L), ambient) * inColor;
+	vec3 diffuse = max(dot(N, L), ambient) * color;
 
 	outFragColor = vec4(diffuse * shadow, 1.0);
 

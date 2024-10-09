@@ -23,6 +23,7 @@ VkDescriptorSetLayout vkglTF::descriptorSetLayoutImage = VK_NULL_HANDLE;
 VkDescriptorSetLayout vkglTF::descriptorSetLayoutUbo = VK_NULL_HANDLE;
 VkMemoryPropertyFlags vkglTF::memoryPropertyFlags = 0;
 uint32_t vkglTF::descriptorBindingFlags = vkglTF::DescriptorBindingFlags::ImageBaseColor;
+////layout (set = 2, binding = 1) uniform sampler2D samplerNormalMap;  for the vkglTF::DescriptorBindingFlags::ImageNormalMap
 
 /*
 	We use a custom image loading function with tinyglTF, so we can do custom stuff loading ktx textures
@@ -442,6 +443,9 @@ void vkglTF::Material::createDescriptorSet(VkDescriptorPool descriptorPool, VkDe
 	descriptorSetAllocInfo.pSetLayouts = &descriptorSetLayout;
 	descriptorSetAllocInfo.descriptorSetCount = 1;
 	VK_CHECK_RESULT(vkAllocateDescriptorSets(device->logicalDevice, &descriptorSetAllocInfo, &descriptorSet));
+
+	assert(descriptorSet != nullptr);
+	
 	std::vector<VkDescriptorImageInfo> imageDescriptors{};
 	std::vector<VkWriteDescriptorSet> writeDescriptorSets{};
 	if (descriptorBindingFlags & DescriptorBindingFlags::ImageBaseColor) {
@@ -758,6 +762,10 @@ vkglTF::Model::~Model()
 void vkglTF::Model::loadNode(vkglTF::Node *parent, const tinygltf::Node &node, uint32_t nodeIndex, const tinygltf::Model &model, std::vector<uint32_t>& indexBuffer, std::vector<Vertex>& vertexBuffer, float globalscale)
 {
 	vkglTF::Node *newNode = new Node{};
+	if (nodeIndex == 8)
+	{
+		bool btmp = true;
+	}
 	newNode->index = nodeIndex;
 	newNode->parent = parent;
 	newNode->name = node.name;
@@ -1396,9 +1404,15 @@ void vkglTF::Model::loadFromFile(std::string filename, vks::VulkanDevice *device
 			descriptorLayoutCI.pBindings = setLayoutBindings.data();
 			VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device->logicalDevice, &descriptorLayoutCI, nullptr, &descriptorSetLayoutImage));
 		}
+		int i = 0;
 		for (auto& material : materials) {
 			if (material.baseColorTexture != nullptr) {
+				i++;
 				material.createDescriptorSet(descriptorPool, vkglTF::descriptorSetLayoutImage, descriptorBindingFlags);
+				/*if (material.descriptorSet == nullptr)
+				{
+					bool bTmp = true;
+				}*/
 			}
 		}
 	}
@@ -1428,14 +1442,21 @@ void vkglTF::Model::drawNode(Node *node, VkCommandBuffer commandBuffer, uint32_t
 				skip = (material.alphaMode != Material::ALPHAMODE_BLEND);
 			}
 			if (!skip) {
-				if (renderFlags & RenderFlags::BindImages) {
-					vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, bindImageSet, 1, &material.descriptorSet, 0, nullptr);
+				if (renderFlags & RenderFlags::BindImages) 
+				{
+					if (material.baseColorTexture)
+					{
+						vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, bindImageSet, 1, &material.descriptorSet, 0, nullptr);
+					}
+					//vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, bindImageSet, 1, &material.descriptorSet, 0, nullptr);
 				}
 				vkCmdDrawIndexed(commandBuffer, primitive->indexCount, 1, primitive->firstIndex, 0, 0);
 			}
 		}
 	}
+	int i = 0;
 	for (auto& child : node->children) {
+		i++;
 		drawNode(child, commandBuffer, renderFlags, pipelineLayout, bindImageSet);
 	}
 }

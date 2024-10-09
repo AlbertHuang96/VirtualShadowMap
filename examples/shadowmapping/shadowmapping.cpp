@@ -26,6 +26,7 @@ public:
 	// Slope depth bias factor, applied depending on polygon's slope
 	float depthBiasSlope = 1.75f;
 
+	float sceneRadius = 0;
 	glm::vec3 lightPos = glm::vec3();
 	float lightFOV = 45.0f;
 
@@ -345,7 +346,8 @@ public:
 					// Render the shadows scene
 					vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets.scene, 0, nullptr);
 					vkCmdBindPipeline(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, (filterPCF) ? pipelines.sceneShadowPCF : pipelines.sceneShadow);
-					scenes[sceneIndex].draw(drawCmdBuffers[i]);
+					scenes[sceneIndex].draw(drawCmdBuffers[i], vkglTF::RenderFlags::BindImages, pipelineLayout);
+					// vkglTF::RenderFlags::BindImages to setup the second descriptor set set = 1
 				}
 
 				drawUI(drawCmdBuffers[i]);
@@ -360,9 +362,18 @@ public:
 	void loadAssets()
 	{
 		const uint32_t glTFLoadingFlags = vkglTF::FileLoadingFlags::PreTransformVertices | vkglTF::FileLoadingFlags::PreMultiplyVertexColors | vkglTF::FileLoadingFlags::FlipY;
-		scenes.resize(2);
-		scenes[0].loadFromFile(getAssetPath() + "models/vulkanscene_shadow.gltf", vulkanDevice, queue, glTFLoadingFlags);
-		scenes[1].loadFromFile(getAssetPath() + "models/samplescene.gltf", vulkanDevice, queue, glTFLoadingFlags);
+		//scenes.resize(2);
+		//scenes[0].loadFromFile(getAssetPath() + "models/vulkanscene_shadow.gltf", vulkanDevice, queue, glTFLoadingFlags);
+		//scenes[1].loadFromFile(getAssetPath() + "models/samplescene.gltf", vulkanDevice, queue, glTFLoadingFlags);
+
+		scenes.resize(1);
+		//scenes[0].loadFromFile(getAssetPath() + "models/sponza/sponza.gltf", vulkanDevice, queue, glTFLoadingFlags);
+
+		scenes[0].loadFromFile(getAssetPath() + "models/BistroGltf/Bistro.gltf", vulkanDevice, queue, glTFLoadingFlags);
+
+		scenes[0].getSceneDimensions();
+		sceneRadius = scenes[0].dimensions.radius;
+
 		sceneNames = {"Vulkan scene", "Teapots and pillars" };
 	}
 
@@ -428,8 +439,11 @@ public:
 
 	void preparePipelines()
 	{
+		const std::vector<VkDescriptorSetLayout> setLayouts = { descriptorSetLayout, vkglTF::descriptorSetLayoutImage };
 		// Layout
 		VkPipelineLayoutCreateInfo pipelineLayoutCreateInfo = vks::initializers::pipelineLayoutCreateInfo(&descriptorSetLayout, 1);
+		pipelineLayoutCreateInfo.setLayoutCount = 2;
+		pipelineLayoutCreateInfo.pSetLayouts = setLayouts.data();
 		VK_CHECK_RESULT(vkCreatePipelineLayout(device, &pipelineLayoutCreateInfo, nullptr, &pipelineLayout));
 
 		// Pipelines
@@ -517,9 +531,14 @@ public:
 	void updateLight()
 	{
 		// Animate the light source
-		lightPos.x = cos(glm::radians(timer * 360.0f)) * 40.0f;
-		lightPos.y = -50.0f + sin(glm::radians(timer * 360.0f)) * 20.0f;
-		lightPos.z = 25.0f + sin(glm::radians(timer * 360.0f)) * 5.0f;
+		//lightPos.x = cos(glm::radians(timer * 360.0f)) * 40.0f;
+		//lightPos.y = -50.0f + sin(glm::radians(timer * 360.0f)) * 20.0f;
+		//lightPos.z = 25.0f + sin(glm::radians(timer * 360.0f)) * 5.0f;
+
+		lightPos.x = 40.0f;
+		lightPos.y = -50.0f;
+		lightPos.z = 25.0f;
+
 	}
 
 	void updateUniformBuffers()
@@ -537,11 +556,13 @@ public:
 	void updateUniformBufferOffscreen()
 	{
 		// Matrix from light's point of view
-		glm::mat4 depthProjectionMatrix = glm::perspective(glm::radians(lightFOV), 1.0f, zNear, zFar);
+		//glm::mat4 depthProjectionMatrix = glm::perspective(glm::radians(lightFOV), 1.0f, zNear, zFar);
+		glm::mat4 shadowProj = glm::ortho(-sceneRadius, sceneRadius, -sceneRadius, sceneRadius, zNear, sceneRadius * 2);
+
 		glm::mat4 depthViewMatrix = glm::lookAt(lightPos, glm::vec3(0.0f), glm::vec3(0, 1, 0));
 		glm::mat4 depthModelMatrix = glm::mat4(1.0f);
 
-		uniformDataOffscreen.depthMVP = depthProjectionMatrix * depthViewMatrix * depthModelMatrix;
+		uniformDataOffscreen.depthMVP = shadowProj * depthViewMatrix * depthModelMatrix;
 
 		memcpy(uniformBuffers.offscreen.mapped, &uniformDataOffscreen, sizeof(uniformDataOffscreen));
 	}

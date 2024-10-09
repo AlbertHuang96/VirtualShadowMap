@@ -1,9 +1,12 @@
 
 #version 450
 
+#extension GL_EXT_debug_printf : enable
+
 //layout(local_size_x = 32, local_size_y = 32, local_size_z = 1) in;
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 
+#define TILE_COUNT 16
 #define LIGHT_COUNT 1
 
 struct VirtualTile 
@@ -36,12 +39,14 @@ layout (binding = 1) uniform uboLights
 } uboLight;
 
 //camera
-layout (binding = 2) uniform uboCompute0 
+layout (binding = 2) uniform uboComputeScene 
 {
-	mat4 invViewProj;
+    float sceneRadius;
+	mat4 camInvViewProj;
 } ubo;
 
-layout (binding = 3) uniform sampler2DArray samplerShadowMap;
+//layout (binding = 3) uniform sampler2DArray samplerShadowMap;
+layout (binding = 3) uniform sampler2D samplerDepth;
 
 vec3 computeWorldPosition(vec2 uv, float depth)
 {
@@ -51,7 +56,7 @@ vec3 computeWorldPosition(vec2 uv, float depth)
     pos.xy = uv * 2 - 1.0;
     //mat4 invViewProj = inverse(ubo.projection * ubo.view);
     //vec4 worldPos = invViewProj * pos;
-    vec4 worldPos = ubo.invViewProj * pos;
+    vec4 worldPos = ubo.camInvViewProj * pos;
     return worldPos.xyz / worldPos.w;
 }
 
@@ -71,17 +76,31 @@ void main()
 	//memoryBarrier();
 
     //ivec2 id = ivec2(gl_LocalInvocationID.xy);
-    ivec3 texDim = textureSize(samplerShadowMap, 0);
+    //ivec3 texDim = textureSize(samplerShadowMap, 0);
+    ivec2 texDim = textureSize(samplerDepth, 0);
     //vec2 uv = vec2(id.x / float(texDim.x), id.y / float(texDim.y));
     //
     ivec2 id = ivec2(gl_GlobalInvocationID.xy);
+    // will print 2730 msgs
+    //debugPrintfEXT("id.x = %d and id.y = %d\n", id.x, id.y);
     vec2 uv = vec2(id.x / float(texDim.x), id.y / float(texDim.y));
+    //debugPrintfEXT("uv.x = %f and uv.y = %f\n", uv.x, uv.y);
 
     for(int i = 0; i < LIGHT_COUNT; ++i)
     {
         // for each light, iterate each pixel and get the depth
-        float depth = texture(samplerShadowMap, vec3(uv, i)).r;
+
+        // it should be the depth map in the GBuffer pass but not the shadow map samplerShadowMap
+        // need a depth buffer in the mrt.frag
+        //float depth = texture(samplerShadowMap, vec3(uv, i)).r;
+
+        // to sample from the shadowmap - render from the light point of view?
+        float depth = texture(samplerDepth, uv).r;
+        //debugPrintfEXT("depth = %f \n", depth);
+
+        // the frustum affects lighting
         vec3 worldPos = computeWorldPosition(uv, depth);
+        //debugPrintfEXT("worldPos.x = %f, worldPos.y = %f, worldPos.z = %f \n", worldPos.x, worldPos.y, worldPos.z);
 
         vec4 shaodwClipPos = uboLight.lights[i].viewMatrix * vec4(worldPos, 1.0f);
         shaodwClipPos.xyz = shaodwClipPos.xyz / shaodwClipPos.w;
@@ -99,11 +118,11 @@ void main()
         
         // floor Side note: The return value is of type floating scalar or float vector 
         //although the result of the operation is an integer.
-        float indexTmp = floor(uvShadow.y * 128) * 128 + floor(uvShadow.x * 128);
+        float indexTmp = floor(uvShadow.y * TILE_COUNT) * TILE_COUNT + floor(uvShadow.x * TILE_COUNT);
         
         //GLSL casting a float to an int automatically floors it (at least in any implementation I've ever seen)
         int index = int(indexTmp);
-         if (index == 16384)
+         if (index >= TILE_COUNT * TILE_COUNT)
         {
             // uvShadow.y == 1.0f
             return;

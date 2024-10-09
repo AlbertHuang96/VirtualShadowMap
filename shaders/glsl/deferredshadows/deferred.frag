@@ -1,9 +1,9 @@
 #version 450
 
-layout (binding = 1) uniform sampler2D samplerposition;
-layout (binding = 2) uniform sampler2D samplerNormal;
-layout (binding = 3) uniform sampler2D samplerAlbedo;
-layout (binding = 5) uniform sampler2DArray samplerShadowMap;
+layout (set = 0, binding = 1) uniform sampler2D samplerposition;
+layout (set = 0, binding = 2) uniform sampler2D samplerNormal;
+layout (set = 0, binding = 3) uniform sampler2D samplerAlbedo;
+layout (set = 0, binding = 5) uniform sampler2DArray samplerShadowMap;
 
 layout (location = 0) in vec2 inUV;
 
@@ -22,7 +22,7 @@ struct Light
 	mat4 viewMatrix;
 };
 
-layout (binding = 4) uniform UBO 
+layout (set = 0, binding = 4) uniform UBO 
 {
 	vec4 viewPos;
 	Light lights[LIGHT_COUNT];
@@ -147,7 +147,7 @@ void main()
 		float heightAttenuation = smoothstep(lightRange, 0.0f, dist);
 
 		// Diffuse lighting
-		float NdotL = max(0.0, dot(N, L));
+		float NdotL = max(0.1, dot(N, L));
 		vec3 diff = vec3(NdotL);
 
 		// Specular lighting
@@ -155,13 +155,14 @@ void main()
 		float NdotR = max(0.0, dot(R, V));
 		vec3 spec = vec3(pow(NdotR, 16.0) * albedo.a * 2.5);
 
-		fragcolor += vec3((diff + spec) * spotEffect * heightAttenuation) * ubo.lights[i].color.rgb * albedo.rgb;
+		fragcolor += diff * albedo.rgb;
+		//fragcolor += vec3((diff + spec) * spotEffect * heightAttenuation) * ubo.lights[i].color.rgb * albedo.rgb;
 	}    	
 
 	// Shadow calculations in a separate pass
 	if (ubo.useShadows > 0)
 	{
-		fragcolor = shadow(fragcolor, fragPos);
+		//fragcolor = shadow(fragcolor, fragPos);
 	}
 
 	outFragColor = vec4(fragcolor, 1.0);

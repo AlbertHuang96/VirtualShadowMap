@@ -3,12 +3,12 @@
 // This extension is required to use printf
 #extension GL_EXT_debug_printf : enable
 
-#define TILE_COUNT 128
+#define TILE_COUNT 16
 #define LIGHT_COUNT 1
 
 //layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
 // invocation dim
-layout(local_size_x = 32, local_size_y = 32, local_size_z = 1) in;
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 //shared uint count;
 
@@ -28,7 +28,7 @@ struct Light
 	vec4 position;
 	vec4 target;
 	vec4 color;
-	mat4 viewMatrix;
+	mat4 viewProjMatrix;
 };
 
 layout (binding = 1) uniform uboLights 
@@ -40,9 +40,10 @@ layout (binding = 1) uniform uboLights
 } uboLight;
 
 //camera
-layout (binding = 2) uniform uboCompute0 
+layout (binding = 2) uniform uboComputeScene 
 {
-	mat4 invViewProj;
+	float sceneRadius;
+	mat4 camInvViewProj;
 } ubo;
 
 struct UsedVirtualTile
@@ -85,12 +86,6 @@ void main()
 
 	//uint idx = gl_GlobalInvocationID.x + gl_GlobalInvocationID.y * gl_NumWorkGroups.x * gl_WorkGroupSize.x;
 	//debugPrintfEXT("idx = %d\n", idx);
-	//if (idx == 0)
-	//{
-	//	atomicExchange(table.count, 0);
-	//}
-
-	//atomicAdd(table.count, 1);
 
 	//atomicAdd(table.count, 1);
 	//table.id[index] = table.count;
@@ -108,24 +103,11 @@ void main()
 	memoryBarrier();
 
     int flag = virtualTiles[index].flag;
-	//int flag2 = 0;
-	//atomicExchange(virtualTiles[index].flag, flag2);
-	//debugPrintfEXT("flag = %d\n", flag);
 
-	//ssbo coherent?
-	// barrier; mem barrier?
     if (flag == 1)
     {
 		debugPrintfEXT("index = %d\n", index);
         atomicAdd(table.count, 1);
-		//barrier();
-		//memoryBarrier();
-
-		//atomicAdd(count, 1);
-		//barrier();
-		//memoryBarrier();
-
-		// atomicExchange(table.count, 0);
 
 		// for (int i = 0; i < index; i++)
 		// {
@@ -144,7 +126,7 @@ void main()
 				count = count + 1;
 			}
 		}
-		debugPrintfEXT("count = %d\n", count);
+		//debugPrintfEXT("count = %d\n", count);
 
 		table.id[index] = count - 1;
 
@@ -154,16 +136,24 @@ void main()
 		//table.id[index] = table.count;
 		//atomicExchange(table.id[index], table.count);
 
-		//atomicExchange(table.count, 0);
+		//float step = 20.0f / 128;
+		float step = ubo.sceneRadius / TILE_COUNT;
+
+		float left = -ubo.sceneRadius + step * gl_GlobalInvocationID.x;
+		float right = left + step;
+
+		float bottom = -ubo.sceneRadius + step * gl_GlobalInvocationID.y;
+		float top = bottom + step;
+
+		//mat4 orthoProj
+		// tiles[index]
+		tiles[count - 1].virtualTileViewProj = mat4(vec4(2 / (right - left), 0, 0, 0),
+												vec4(0, 2 / (top - bottom), 0, 0),
+												vec4(0, 0, -2.0f, 0),
+												vec4(-(right + left) / (right - left), -(top + bottom) / (top - bottom), -1.0f, 1.0f));
 
 		barrier();
 		memoryBarrier();
-		
-		//table.id[index] = int(count);
-		//table.id[index] = table.count;
-
-		//barrier();
-		//memoryBarrier();
 
 		//atomicExchange(table.id[index], table.count);
     }
