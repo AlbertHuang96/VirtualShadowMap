@@ -42,7 +42,7 @@ layout (binding = 1) uniform uboLights
 layout (binding = 2) uniform uboComputeScene 
 {
     float sceneRadius;
-	mat4 camInvViewProj;
+    mat4 camInvViewProj;
 } ubo;
 
 //layout (binding = 3) uniform sampler2DArray samplerShadowMap;

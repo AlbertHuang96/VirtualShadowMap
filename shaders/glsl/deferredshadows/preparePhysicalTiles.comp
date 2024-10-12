@@ -44,6 +44,7 @@ layout (binding = 2) uniform uboComputeScene
 {
 	float sceneRadius;
 	mat4 camInvViewProj;
+	//float sceneRadius;
 } ubo;
 
 struct UsedVirtualTile
@@ -59,9 +60,14 @@ layout (binding = 3) buffer UsedVirtualTileMatrices
 
 layout (binding = 4) buffer VirtualTileTable
 {
-	int count;
+	int count; // for debug
 	int id[TILE_COUNT * TILE_COUNT];
 } table;
+
+layout (binding = 5) buffer UsedVirtualTileCounter
+{
+	int atomicCounter;
+} usedVirtualTileCounter;
 
 void main()
 {
@@ -75,6 +81,7 @@ void main()
 	// 	// the old cull.comp use this
 	// 	// the new cull use vkCmdFillBuffer in the cmdbuffer to clear I guess
 		atomicExchange(table.count, 0);
+		atomicExchange(usedVirtualTileCounter.atomicCounter, 0);
 	// 	for (uint i = 0; i < TILE_COUNT * TILE_COUNT; i++)
 	// 	{
 	// 		atomicExchange(table.id[i], -1);
@@ -108,6 +115,8 @@ void main()
     {
 		debugPrintfEXT("index = %d\n", index);
         atomicAdd(table.count, 1);
+
+		atomicAdd(usedVirtualTileCounter.atomicCounter, 1);
 
 		// for (int i = 0; i < index; i++)
 		// {
@@ -145,8 +154,8 @@ void main()
 		float bottom = -ubo.sceneRadius + step * gl_GlobalInvocationID.y;
 		float top = bottom + step;
 
-		//mat4 orthoProj
-		// tiles[index]
+		// //mat4 orthoProj
+		// // tiles[index]
 		tiles[count - 1].virtualTileViewProj = mat4(vec4(2 / (right - left), 0, 0, 0),
 												vec4(0, 2 / (top - bottom), 0, 0),
 												vec4(0, 0, -2.0f, 0),

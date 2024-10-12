@@ -107,7 +107,10 @@ public:
 		int32_t debugDisplayTarget = 0;
 	} uniformDataComposition;
 
+	// alignas(16)
 	struct UniformDataCompute0 {
+		/*float sceneRadius;
+		alignas(16) glm::mat4 camInvViewProj;*/
 		float sceneRadius;
 		glm::mat4 camInvViewProj;
 	} uniformDataComputeScene;
@@ -139,6 +142,12 @@ public:
 
 	// ---------------------------VSM-------------------------------
 	// VSM ssbo
+	struct
+	{
+		int atomicCounter;
+	} usedVirtualTileCounter;
+	vks::Buffer usedVirualTileCountBuffer;
+
 	vks::Buffer virtualTileFlagBuffer;
 	vks::Buffer virtualTileTableBuffer;
 
@@ -1259,6 +1268,16 @@ public:
 		vulkanDevice->copyBuffer(&stagingBuffer2, &usedVirtualTileMatrixBuffer, queue);
 
 		stagingBuffer2.destroy();
+
+		usedVirtualTileCounter.atomicCounter = 0;
+		VK_CHECK_RESULT(vulkanDevice->createBuffer(
+			VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			&usedVirualTileCountBuffer,
+			sizeof(usedVirtualTileCounter)));
+
+		// Map for host access
+		VK_CHECK_RESULT(usedVirualTileCountBuffer.map());
 	}
 
 	void prepareComputeMarkUsedVirtualTiles()
@@ -1396,6 +1415,10 @@ public:
 				VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
 				VK_SHADER_STAGE_COMPUTE_BIT,
 				4),
+			vks::initializers::descriptorSetLayoutBinding(
+				VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+				VK_SHADER_STAGE_COMPUTE_BIT,
+				5)
 		};
 		VkDescriptorSetLayoutCreateInfo descriptorLayout = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
 		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &computePreparePhysicalTiles.descriptorSetLayout));
@@ -1428,7 +1451,12 @@ public:
 				computePreparePhysicalTiles.descriptorSet,
 				VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
 				4,
-				&virtualTileTableBuffer.descriptor)
+				&virtualTileTableBuffer.descriptor),
+			vks::initializers::writeDescriptorSet(
+				computePreparePhysicalTiles.descriptorSet,
+				VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+				5,
+				&usedVirualTileCountBuffer.descriptor)
 
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(computeWriteDescriptorSets.size()), computeWriteDescriptorSets.data(), 0, NULL);
@@ -1676,6 +1704,8 @@ public:
 		VK_CHECK_RESULT(vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE));
 
 		VulkanExampleBase::submitFrame();
+
+		memcpy(&usedVirtualTileCounter, usedVirualTileCountBuffer.mapped, sizeof(usedVirtualTileCounter));
 	}
 
 	virtual void render()
@@ -1699,6 +1729,9 @@ public:
 
 			if (overlay->header("VSM Settings"))
 			{
+				if (overlay->header("Statistics")) {
+					overlay->text("used virtual tiles number: %d", usedVirtualTileCounter.atomicCounter);
+				}
 				
 				if (overlay->checkBox("VirtualShadowMap", &enableVirtualShadowMap)) 
 				{
