@@ -33,7 +33,7 @@
 #define PHYSICAL_TILE_COUNT 8
 
 // frustum culling setting
-#define NUM_OF_NODES_PER_TILES 10
+#define NUM_OF_NODES_PER_TILE 10
 
 #define GBUFFER_DEPTH_DIM 512
 
@@ -1498,21 +1498,21 @@ public:
 		//queueFamilyIndexCount is the number of entries in the pQueueFamilyIndices array.
 		//pQueueFamilyIndices is a pointer to an array of queue families that will access this buffer.It is ignored if sharingMode is not VK_SHARING_MODE_CONCURRENT.
 
-		VK_CHECK_RESULT(vulkanDevice->createBufferAsync(
+		/*VK_CHECK_RESULT(vulkanDevice->createBufferAsync(
 			VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
 			&visibleNodesIndexBuffer,
-			PHYSICAL_TILE_COUNT * PHYSICAL_TILE_COUNT * NUM_OF_NODES_PER_TILES * sizeof(int),
-			asyncQueueFamilyIndices));
+			PHYSICAL_TILE_COUNT * PHYSICAL_TILE_COUNT * NUM_OF_NODES_PER_TILE * sizeof(int),
+			asyncQueueFamilyIndices));*/
 
 		//NUM_OF_NODES__PER_TILES
 		//scene.nodesAABB.size() * sizeof(int)
 
-		/*VK_CHECK_RESULT(vulkanDevice->createBuffer(
+		VK_CHECK_RESULT(vulkanDevice->createBuffer(
 			VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
 			&visibleNodesIndexBuffer,
-			scene.nodesAABB.size() * sizeof(int)));*/
+			PHYSICAL_TILE_COUNT* PHYSICAL_TILE_COUNT* NUM_OF_NODES_PER_TILE * sizeof(int)));
 
 
 		// Map for host access
@@ -1796,12 +1796,12 @@ public:
 			vks::initializers::writeDescriptorSet(
 				computePerTileFrustumCulling.descriptorSet,
 				VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-				2,
+				3,
 				&visibleNodesCountBuffer.descriptor),
 			vks::initializers::writeDescriptorSet(
 				computePerTileFrustumCulling.descriptorSet,
 				VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-				3,
+				4,
 				&usedVirualTileCountBuffer.descriptor)
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(computeWriteDescriptorSets.size()), computeWriteDescriptorSets.data(), 0, NULL);
@@ -1809,10 +1809,23 @@ public:
 		//   descriptor pools, descriptor set layout, descriptorSets
 		//  
 		//   need usedVirtualTileCounter.atomicCounter
+		// 
+		// descriptor set layout:
 		//std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings
+		// 
+		// descriptorSets:
 		//std::vector<VkWriteDescriptorSet> computeWriteDescriptorSets 
-		//   visibleNodesIndexBuffer.setupDescriptor();
-		//   vks::initializers::writeDescriptorSet
+		//visibleNodesIndexBuffer.setupDescriptor(); 
+		//visibleNodesIndexBuffer.buffer;
+		// 
+		// for (int i = 0; i < usedVirtualTileCounter.atomicCounter; i++)
+		//     
+		//VkDescriptorBufferInfo descriptor;
+		//descriptor.buffer = visibleNodesIndexBuffer.buffer;
+		//descriptor.offset = i + ;
+		//descriptor.range = NUM_OF_NODES_PER_TILE * sizeof(int);
+		//  descriptor put in  vks::initializers::writeDescriptorSet
+		// computeWriteDescriptorSets.push_back(VkWriteDescriptorSet )
 		//vkUpdateDescriptorSets
 		
 
