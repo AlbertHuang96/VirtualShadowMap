@@ -147,6 +147,8 @@ void main()
 
 		//float step = 20.0f / 128;
 		float step = ubo.sceneRadius / TILE_COUNT;
+		// sceneRadius = the cover area  -> different area size = clipmap
+		// the area was split into equal size tile
 
 		float left = -ubo.sceneRadius + step * gl_GlobalInvocationID.x;
 		float right = left + step;

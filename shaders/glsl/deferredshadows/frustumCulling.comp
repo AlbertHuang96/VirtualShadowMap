@@ -1,0 +1,150 @@
+#version 450
+
+#extension GL_EXT_debug_printf : enable
+
+struct NodeMinMaxTmp
+{
+	vec4 minPt;
+	vec4 maxPt;
+    int nodeIndex;
+};
+//std140
+layout (binding = 0) readonly buffer NodesAABBBuffer
+{
+	NodeMinMaxTmp nodesAABB[];
+};
+
+struct UsedVirtualTile
+{
+	mat4 virtualTileViewProj;
+};
+
+layout (binding = 1) readonly buffer UsedVirtualTileMatrices
+{
+	UsedVirtualTile tiles[];
+};
+
+layout (binding = 2) writeonly buffer VisibleNodeIndexBuffer
+{
+	int nodeIndex[];
+};
+
+layout (binding = 3) buffer VisibleNodesCounter
+{
+	int atomicCounter;
+} visibleNodesCounter;
+
+layout (binding = 4) readonly buffer UsedVirtualTileCounter
+{
+	int atomicCounter;
+} usedVirtualTileCounter;
+
+layout(local_size_x = 16) in;
+
+bool frustumCheck(vec4 pos, float radius, vec4 planes[6])
+{
+	// Check sphere against frustum planes
+	for (int i = 0; i < 6; i++) 
+	{
+		if (dot(pos, planes[i]) + radius < 0.0)
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+void main()
+{
+    uint idx = gl_GlobalInvocationID.x;
+
+    if (idx >= usedVirtualTileCounter.atomicCounter)
+    {
+        return;
+    }
+
+    if (idx == 0)
+	{
+		atomicExchange(visibleNodesCounter.atomicCounter, 0);
+	}
+
+    mat4 projection = tiles[idx].virtualTileViewProj;
+    //vec4 left, right, top, bottom, near, far;
+    vec4 planes[6];
+    planes[0].x = projection[0].w + projection[0].x;
+	planes[0].y = projection[1].w + projection[1].x;
+	planes[0].z = projection[2].w + projection[2].x;
+	planes[0].w = projection[3].w + projection[3].x;
+
+	planes[1].x = projection[0].w - projection[0].x;
+	planes[1].y = projection[1].w - projection[1].x;
+	planes[1].z = projection[2].w - projection[2].x;
+	planes[1].w = projection[3].w - projection[3].x;
+
+	planes[2].x = projection[0].w - projection[0].y;
+	planes[2].y = projection[1].w - projection[1].y;
+	planes[2].z = projection[2].w - projection[2].y;
+	planes[2].w = projection[3].w - projection[3].y;
+
+	planes[3].x = projection[0].w + projection[0].y;
+	planes[3].y = projection[1].w + projection[1].y;
+	planes[3].z = projection[2].w + projection[2].y;
+	planes[3].w = projection[3].w + projection[3].y;
+
+	planes[4].x = projection[0].w + projection[0].z;
+	planes[4].y = projection[1].w + projection[1].z;
+	planes[4].z = projection[2].w + projection[2].z;
+	planes[4].w = projection[3].w + projection[3].z;
+
+	planes[5].x = projection[0].w - projection[0].z;
+	planes[5].y = projection[1].w - projection[1].z;
+	planes[5].z = projection[2].w - projection[2].z;
+	planes[5].w = projection[3].w - projection[3].z;
+
+    //int nodeSize = length(nodesAABB);
+    int nodeSize = nodesAABB.length();
+    // print out nodeSize
+    debugPrintfEXT("nodeSize = %d\n", nodeSize);
+
+    for (int i = 0; i < nodeSize; i++)
+    {
+        NodeMinMaxTmp tmp = nodesAABB[i];
+        vec4 maxPoint = tmp.maxPt;
+        vec4 minPoint = tmp.minPt;
+
+        vec4 center = (maxPoint + minPoint) / 2;
+        float radius = distance(maxPoint.xyz, minPoint.xyz);
+
+        if (frustumCheck(center, radius, planes))
+        {
+            atomicAdd(visibleNodesCounter.atomicCounter, 1);
+            nodeIndex[i] = tmp.nodeIndex;
+
+            barrier();
+		    memoryBarrier();
+        }
+
+        // vec4 points[8];
+        // points[0] = vec4(maxPoint.xyz, 1.0);
+        // points[1] = vec4(maxPoint.xy, minPoint.z, 1.0);
+        // points[2] = vec4(maxPoint.x, minPoint.y, maxPoint.z, 1.0);
+        // points[3] = vec4(maxPoint.x, minPoint.yz, 1.0);
+        //
+        // points[4] = vec4(minPoint.x, maxPoint.y, minPoint.z, 1.0);
+        // points[4] = vec4(minPoint.x, maxPoint.yz, 1.0);
+        // points[6] = vec4(minPoint.xy, maxPoint.z, 1.0);
+        // points[7] = vec4(minPoint.xyz,1.0);
+        //
+        // for (int j = 0; j < 8; j++)
+        // {
+        //     vec4 testPoint = points[j];
+        //     if (frustumCheck(testPoint, radius, planes))
+        //     {
+        //         atomicAdd(visibleNodesCounter.atomicCounter, 1);
+        //         nodeIndex[visibleNodesCounter.atomicCounter] = tmp.nodeIndex;
+        //         break;
+        //     }
+        // }
+
+    }
+}

@@ -283,6 +283,16 @@ namespace vkglTF
 		std::vector<Material> materials;
 		std::vector<Animation> animations;
 
+		struct NodeMinMax
+		{
+			glm::vec4 minPt = glm::vec4(FLT_MAX);
+			glm::vec4 maxPt = glm::vec4(-FLT_MAX);
+			int nodeIndex = -1;
+			float __padding[3] = { 0 };
+
+		};
+		std::vector<NodeMinMax> nodesAABB;
+
 		struct Dimensions {
 			glm::vec3 min = glm::vec3(FLT_MAX);
 			glm::vec3 max = glm::vec3(-FLT_MAX);
@@ -306,6 +316,10 @@ namespace vkglTF
 		void bindBuffers(VkCommandBuffer commandBuffer);
 		void drawNode(Node* node, VkCommandBuffer commandBuffer, uint32_t renderFlags = 0, VkPipelineLayout pipelineLayout = VK_NULL_HANDLE, uint32_t bindImageSet = 1);
 		void draw(VkCommandBuffer commandBuffer, uint32_t renderFlags = 0, VkPipelineLayout pipelineLayout = VK_NULL_HANDLE, uint32_t bindImageSet = 1);
+
+		//need getSceneDimensions() and GPU/CPU frustum culling
+		void drawFrustumCulledNodes(VkCommandBuffer commandBuffer, std::vector<int>& culledNodeIndex);
+
 		void getNodeDimensions(Node* node, glm::vec3& min, glm::vec3& max);
 		void getSceneDimensions();
 		void updateAnimation(uint32_t index, float time);

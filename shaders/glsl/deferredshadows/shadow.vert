@@ -33,6 +33,11 @@ layout (set = 1, binding = 1) buffer UsedVirtualTileMatrices
 	UsedVirtualTileProj matrices[];
 };
 
+layout(push_constant) uniform PushConsts 
+{
+	int index;
+} pushConsts;
+
 //layout (binding = 3) uniform sampler2D samplerDepth;
 
 void main()
@@ -71,8 +76,16 @@ void main()
 //shadow.vert:64: '=' : 
 // cannot convert from 'layout( column_major std430) temp structure{layout( column_major) global highp 4X4 matrix of float virtualTileProj}' 
 //to ' temp highp 4X4 matrix of float'
-    mat4 tileProjectionMatrix = matrices[targetID].virtualTileProj;
+    mat4 tileProjMatrix = matrices[targetID].virtualTileProj;
     //gl_Position = matrices[targetID] * ubo.modelView[0] * tmpPos;
+
+    //mat4 tileProjMatrixPushConsts = matrices[pushConsts.index].virtualTileProj;
+
+    // mat4 == operator?
+    // if (tileProjMatrix == tileProjMatrixPushConsts)
+    // {
+    //     //debugPrintfEXT("tileProjMatrix == tileProjMatrixPushConsts\n");
+    // }
 
 	//outInstanceIndex = gl_InstanceIndex;
 	//vec4 instancedPos = ubo.instancePos[inInstanceIndex[0]];
@@ -80,6 +93,6 @@ void main()
 	vec4 tmpPos = inPos + instancedPos;
 
     // ubo.modelView[0] view here needs to be changed?
-    gl_Position = tileProjectionMatrix * ubo.modelView[0] * tmpPos;
+    gl_Position = tileProjMatrix * ubo.modelView[0] * tmpPos;
 	//l_Position = ubo.proj[0] * ubo.modelView[0] * tmpPos;
 }

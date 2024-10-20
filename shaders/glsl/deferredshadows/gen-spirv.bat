@@ -11,4 +11,6 @@ glslangvalidator -V shadow.frag -o shadow.frag.spv
 
 glslangvalidator -V mrt.frag -o mrt.frag.spv
 
+glslangvalidator -V frustumCulling.comp -o frustumCulling.comp.spv
+
 pause

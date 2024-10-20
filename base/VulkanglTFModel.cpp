@@ -1473,10 +1473,37 @@ void vkglTF::Model::draw(VkCommandBuffer commandBuffer, uint32_t renderFlags, Vk
 	}
 }
 
+void vkglTF::Model::drawFrustumCulledNodes(VkCommandBuffer commandBuffer, std::vector<int>& culledNodeIndex)
+{
+	if (!buffersBound) {
+		const VkDeviceSize offsets[1] = { 0 };
+		vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertices.buffer, offsets);
+		vkCmdBindIndexBuffer(commandBuffer, indices.buffer, 0, VK_INDEX_TYPE_UINT32);
+	}
+	for (int index : culledNodeIndex)
+	{
+		if (nodes[index]->mesh)
+		{
+			for (Primitive* primitive : nodes[index]->mesh->primitives)
+			{
+				// descriptor?
+				vkCmdDrawIndexed(commandBuffer, primitive->indexCount, 1, primitive->firstIndex, 0, 0);
+			}
+		}
+		//drawNode(node, commandBuffer, renderFlags, pipelineLayout, bindImageSet);
+	}
+}
+
 void vkglTF::Model::getNodeDimensions(Node *node, glm::vec3 &min, glm::vec3 &max)
 {
-	if (node->mesh) {
-		for (Primitive *primitive : node->mesh->primitives) {
+	if (node->mesh) 
+	{
+		NodeMinMax nodeMinMax;
+		nodeMinMax.minPt.w = 1.0f;
+		nodeMinMax.maxPt.w = 1.0f;
+		nodeMinMax.nodeIndex = node->index; // uint32 -> int
+		for (Primitive *primitive : node->mesh->primitives) 
+		{
 			glm::vec4 locMin = glm::vec4(primitive->dimensions.min, 1.0f) * node->getMatrix();
 			glm::vec4 locMax = glm::vec4(primitive->dimensions.max, 1.0f) * node->getMatrix();
 			if (locMin.x < min.x) { min.x = locMin.x; }
@@ -1485,6 +1512,14 @@ void vkglTF::Model::getNodeDimensions(Node *node, glm::vec3 &min, glm::vec3 &max
 			if (locMax.x > max.x) { max.x = locMax.x; }
 			if (locMax.y > max.y) { max.y = locMax.y; }
 			if (locMax.z > max.z) { max.z = locMax.z; }
+
+			if (locMin.x < nodeMinMax.minPt.x) { nodeMinMax.minPt.x = locMin.x; }
+			if (locMin.y < nodeMinMax.minPt.y) { nodeMinMax.minPt.y = locMin.y; }
+			if (locMin.z < nodeMinMax.minPt.z) { nodeMinMax.minPt.z = locMin.z; }
+			if (locMax.x > nodeMinMax.maxPt.x) { nodeMinMax.maxPt.x = locMax.x; }
+			if (locMax.y > nodeMinMax.maxPt.y) { nodeMinMax.maxPt.y = locMax.y; }
+			if (locMax.z > nodeMinMax.maxPt.z) { nodeMinMax.maxPt.z = locMax.z; }
+			nodesAABB.push_back(nodeMinMax);
 		}
 	}
 	for (auto child : node->children) {

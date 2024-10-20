@@ -421,6 +421,81 @@ namespace vks
 		return buffer->bind();
 	}
 
+	//https://easyvulkan.github.io/Ch3-2%20%E5%9B%BE%E5%83%8F%E4%B8%8E%E7%BC%93%E5%86%B2%E5%8C%BA.html
+	//VkDeviceSize VulkanDevice::AdjustNonCoherentMemoryRange(VkDeviceSize& size, VkDeviceSize& offset) const 
+	//{
+	//	const VkDeviceSize& nonCoherentAtomSize = properties.limits.nonCoherentAtomSize;
+	//	//记录offset的初值备用
+	//	VkDeviceSize _offset = offset;
+	//	//记录映射范围的尾部位置
+	//	VkDeviceSize rangeEnd = size + offset;
+	//	//将offset向下凑整到nonCoherentAtomSize的整数倍
+	//	offset = offset / nonCoherentAtomSize * nonCoherentAtomSize;
+	//	//将映射范围向上凑整到nonCoherentAtomSize的整数倍
+	//	rangeEnd = (rangeEnd + nonCoherentAtomSize - 1) / nonCoherentAtomSize * nonCoherentAtomSize;
+	//	//钳制映射范围
+	//	rangeEnd = std::min(rangeEnd, allocationSize);
+	//	//既然rangeEnd是nonCoherentAtomSize的整数倍或内存区尾端位置，offset是nonCoherentAtomSize的整数倍，两者作差即可求得满足条件的size
+	//	size = rangeEnd - offset;
+	//	//将offset的变化量（确切来说是变化量的相反数，我这里写的是初值减末值）返回出去
+	//	return _offset - offset;
+	//}
+
+
+	VkResult VulkanDevice::createBufferAsync(VkBufferUsageFlags usageFlags, VkMemoryPropertyFlags memoryPropertyFlags, vks::Buffer* buffer, VkDeviceSize size, std::vector<uint32_t> indices, void* data)
+	{
+		buffer->device = logicalDevice;
+
+		// Create the buffer handle
+		VkBufferCreateInfo bufferCreateInfo = vks::initializers::bufferCreateInfo(usageFlags, size);
+		if (!indices.empty())
+		{
+			bufferCreateInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+			bufferCreateInfo.queueFamilyIndexCount = static_cast<uint32_t>(indices.size());
+			bufferCreateInfo.pQueueFamilyIndices = indices.data();
+		}
+
+		VK_CHECK_RESULT(vkCreateBuffer(logicalDevice, &bufferCreateInfo, nullptr, &buffer->buffer));
+
+		// Create the memory backing up the buffer handle
+		VkMemoryRequirements memReqs;
+		VkMemoryAllocateInfo memAlloc = vks::initializers::memoryAllocateInfo();
+		vkGetBufferMemoryRequirements(logicalDevice, buffer->buffer, &memReqs);
+		memAlloc.allocationSize = memReqs.size;
+		// Find a memory type index that fits the properties of the buffer
+		memAlloc.memoryTypeIndex = getMemoryType(memReqs.memoryTypeBits, memoryPropertyFlags);
+		// If the buffer has VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT set we also need to enable the appropriate flag during allocation
+		VkMemoryAllocateFlagsInfoKHR allocFlagsInfo{};
+		if (usageFlags & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) {
+			allocFlagsInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO_KHR;
+			allocFlagsInfo.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT_KHR;
+			memAlloc.pNext = &allocFlagsInfo;
+		}
+		VK_CHECK_RESULT(vkAllocateMemory(logicalDevice, &memAlloc, nullptr, &buffer->memory));
+
+		buffer->alignment = memReqs.alignment;
+		buffer->size = size;
+		buffer->usageFlags = usageFlags;
+		buffer->memoryPropertyFlags = memoryPropertyFlags;
+
+		// If a pointer to the buffer data has been passed, map the buffer and copy over the data
+		if (data != nullptr)
+		{
+			VK_CHECK_RESULT(buffer->map());
+			memcpy(buffer->mapped, data, size);
+			if ((memoryPropertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 0)
+				buffer->flush();
+
+			buffer->unmap();
+		}
+
+		// Initialize a default descriptor that covers the whole buffer size
+		buffer->setupDescriptor();
+
+		// Attach the memory to the buffer object
+		return buffer->bind();
+	}
+
 	/**
 	* Copy buffer data from src to dst using VkCmdCopyBuffer
 	* 
