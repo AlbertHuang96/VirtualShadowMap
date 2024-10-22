@@ -1454,9 +1454,9 @@ void vkglTF::Model::drawNode(Node *node, VkCommandBuffer commandBuffer, uint32_t
 			}
 		}
 	}
-	int i = 0;
+	
 	for (auto& child : node->children) {
-		i++;
+		
 		drawNode(child, commandBuffer, renderFlags, pipelineLayout, bindImageSet);
 	}
 }
@@ -1473,7 +1473,7 @@ void vkglTF::Model::draw(VkCommandBuffer commandBuffer, uint32_t renderFlags, Vk
 	}
 }
 
-void vkglTF::Model::drawFrustumCulledNodes(VkCommandBuffer commandBuffer, std::vector<int>& culledNodeIndex)
+void vkglTF::Model::drawFrustumCulledNodes(VkCommandBuffer commandBuffer, uint32_t renderFlags, VkPipelineLayout pipelineLayout, uint32_t bindImageSet, std::vector<int>& culledNodeIndex)
 {
 	if (!buffersBound) {
 		const VkDeviceSize offsets[1] = { 0 };
@@ -1482,14 +1482,28 @@ void vkglTF::Model::drawFrustumCulledNodes(VkCommandBuffer commandBuffer, std::v
 	}
 	for (int index : culledNodeIndex)
 	{
-		if (nodes[index]->mesh)
+		drawNode(nodes[index], commandBuffer, renderFlags, pipelineLayout, bindImageSet);
+		
+		//if (nodes[index]->mesh)
+		//{
+		//	for (Primitive* primitive : nodes[index]->mesh->primitives)
+		//	{
+
+		//		// descriptor?
+		//		vkCmdDrawIndexed(commandBuffer, primitive->indexCount, 1, primitive->firstIndex, 0, 0);
+		//	}
+		//}
+		/*for (auto& child : nodes[index]->children) 
 		{
-			for (Primitive* primitive : nodes[index]->mesh->primitives)
+			if (child->mesh)
 			{
-				// descriptor?
-				vkCmdDrawIndexed(commandBuffer, primitive->indexCount, 1, primitive->firstIndex, 0, 0);
+				for (Primitive* primitive : child->mesh->primitives)
+				{
+					
+					vkCmdDrawIndexed(commandBuffer, primitive->indexCount, 1, primitive->firstIndex, 0, 0);
+				}
 			}
-		}
+		}*/
 		//drawNode(node, commandBuffer, renderFlags, pipelineLayout, bindImageSet);
 	}
 }

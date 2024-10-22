@@ -26,8 +26,12 @@ layout (binding = 1) readonly buffer UsedVirtualTileMatrices
 
 layout (binding = 2) writeonly buffer VisibleNodeIndexBuffer
 {
-	int nodeIndex[];
+	uint nodeIndex[];
 };
+//eStorageBuffer            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+   // eUniformBufferDynamic     = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+    //eStorageBufferDynamic     = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC,
+    //A storage buffer whose offset is specified each time the storage buffer is bound to a command buffer via a descriptor set.
 
 layout (binding = 3) buffer VisibleNodesCounter
 {
@@ -104,7 +108,7 @@ void main()
     //int nodeSize = length(nodesAABB);
     int nodeSize = nodesAABB.length();
     // print out nodeSize
-    debugPrintfEXT("nodeSize = %d\n", nodeSize);
+    //debugPrintfEXT("nodeSize = %d\n", nodeSize);
 
     for (int i = 0; i < nodeSize; i++)
     {
@@ -118,7 +122,20 @@ void main()
         if (frustumCheck(center, radius, planes))
         {
             atomicAdd(visibleNodesCounter.atomicCounter, 1);
-            nodeIndex[i] = tmp.nodeIndex;
+
+            
+            //int & 0xff?
+            //uint index = tmp.nodeIndex;
+            // store the tile frustum index into the second 8 bits
+            uint nodeIndexTmp = (idx & 0xff) << 8 | (tmp.nodeIndex & 0xff);
+            nodeIndex[idx * nodeSize + i] = nodeIndexTmp;
+            debugPrintfEXT("index = %d and nodeIndexTmp = %d \n", idx * nodeSize + i, nodeIndexTmp);
+            // dont use the atomic counter as the index
+            //nodeIndex[visibleNodesCounter.atomicCounter] = nodeIndexTmp;
+            //atomicExchange(nodeIndex[visibleNodesCounter.atomicCounter], nodeIndexTmp);
+
+            //debugPrintfEXT("idx = %d and nodeIndexTmp = %d and visibleNodesCounter.atomicCounter = %d\n", idx, nodeIndexTmp, visibleNodesCounter.atomicCounter);
+            //debugPrintfEXT("idx = %d and tmp.nodeIndex & 0xff = %d and index = %d\n", idx, tmp.nodeIndex & 0xff, index);
 
             barrier();
 		    memoryBarrier();

@@ -1,6 +1,6 @@
 #version 450
 
-//#extension GL_EXT_debug_printf : enable
+#extension GL_EXT_debug_printf : enable
 
 #define LIGHT_COUNT 1
 #define TILE_COUNT 16
@@ -84,7 +84,11 @@ void main()
     // mat4 == operator?
     // if (tileProjMatrix == tileProjMatrixPushConsts)
     // {
-    //     //debugPrintfEXT("tileProjMatrix == tileProjMatrixPushConsts\n");
+    //      debugPrintfEXT("tileProjMatrix == tileProjMatrixPushConsts\n");
+    // }
+    // else
+    // {
+    //     debugPrintfEXT("tileProjMatrix != tileProjMatrixPushConsts\n");
     // }
 
 	//outInstanceIndex = gl_InstanceIndex;

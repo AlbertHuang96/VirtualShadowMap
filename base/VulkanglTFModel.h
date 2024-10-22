@@ -318,7 +318,8 @@ namespace vkglTF
 		void draw(VkCommandBuffer commandBuffer, uint32_t renderFlags = 0, VkPipelineLayout pipelineLayout = VK_NULL_HANDLE, uint32_t bindImageSet = 1);
 
 		//need getSceneDimensions() and GPU/CPU frustum culling
-		void drawFrustumCulledNodes(VkCommandBuffer commandBuffer, std::vector<int>& culledNodeIndex);
+		//void drawFrustumCulledNodes(VkCommandBuffer commandBuffer, std::vector<int>& culledNodeIndex);
+		void drawFrustumCulledNodes(VkCommandBuffer commandBuffer, uint32_t renderFlags, VkPipelineLayout pipelineLayout, uint32_t bindImageSet, std::vector<int>& culledNodeIndex);
 
 		void getNodeDimensions(Node* node, glm::vec3& min, glm::vec3& max);
 		void getSceneDimensions();

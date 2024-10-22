@@ -11,7 +11,7 @@
 #include "vulkanexamplebase.h"
 #include "VulkanFrameBuffer.hpp"
 #include "VulkanglTFModel.h"
-
+#include <set>
 #include <algorithm>
 
 // Must match the LIGHT_COUNT define in the shadow and deferred shaders
@@ -33,7 +33,7 @@
 #define PHYSICAL_TILE_COUNT 8
 
 // frustum culling setting
-#define NUM_OF_NODES_PER_TILE 10
+#define NUM_OF_NODES_PER_TILE 20
 
 #define GBUFFER_DEPTH_DIM 512
 
@@ -46,7 +46,7 @@ public:
 	// Virtual shadow map
 	bool enableDynamicLighting = false;
 	bool enableVirtualShadowMap = true;
-	bool enablePerTileFrustumCulling = true;
+	bool enablePerTileFrustumCulling = false;
 	bool enableMultiViewExtension = false;
 
 	// Keep depth range as small as possible
@@ -166,7 +166,12 @@ public:
 		int atomicCounter;
 	} visibleNodesCounter;
 	vks::Buffer visibleNodesCountBuffer;
-	std::vector<int> culledNodeIndexes;
+
+	std::vector<uint32_t> culledNodeIndexes;
+
+	//std::vector<std::vector<int>> nodeIndicesPerTiles;
+	std::vector<std::set<int>> nodeIndicesPerTiles;
+
 
 	// VSM physical image
 	vks::Texture2D textureComputeTarget;
@@ -474,15 +479,32 @@ public:
 			}
 
 			// at the end of the prepare function the prepared variable was set to true after all the prepare work was done
+			// 
+			// the code doesnt enter this branch.......
 			if (prepared && enablePerTileFrustumCulling)
 			{
-				if (!culledNodeIndexes.empty())
+				//if (!culledNodeIndexes.empty())
 				{
-					scene.drawFrustumCulledNodes(cmdBuffer, culledNodeIndexes);
+					int count = usedVirtualTileCounter.atomicCounter;
+					//uint32_t count = static_cast<uint32_t>(usedVirtualTileCounter.atomicCounter);
+					for (int j = 0; j < count; j++)
+					{
+						vkCmdPushConstants(
+							cmdBuffer,
+							pipelineLayout,
+							VK_SHADER_STAGE_VERTEX_BIT,
+							0,
+							sizeof(int),
+							&j);
+						std::vector<int> nodeIndexTmp(nodeIndicesPerTiles[j].begin(), nodeIndicesPerTiles[j].end());
+						scene.drawFrustumCulledNodes(cmdBuffer, vkglTF::RenderFlags::BindImages, pipelineLayout, 2, nodeIndexTmp);
+					}
+					//scene.drawFrustumCulledNodes(cmdBuffer, culledNodeIndexes);
 				}
 			}
 			else
 			{
+				// this is where the code running in...
 				scene.draw(cmdBuffer, vkglTF::RenderFlags::BindImages, pipelineLayout, 2);
 			}
 			
@@ -693,9 +715,16 @@ public:
 			scene.nodesAABB.erase(std::unique(scene.nodesAABB.begin(), scene.nodesAABB.end(), 
 				[](vkglTF::Model::NodeMinMax& A, vkglTF::Model::NodeMinMax& B) { return A.nodeIndex == B.nodeIndex; }), scene.nodesAABB.end());
 			
-			culledNodeIndexes.resize(scene.nodesAABB.size());
+			culledNodeIndexes.resize(PHYSICAL_TILE_COUNT * PHYSICAL_TILE_COUNT * scene.nodesAABB.size());
+
 		}
 		
+		nodeIndicesPerTiles.resize(PHYSICAL_TILE_COUNT * PHYSICAL_TILE_COUNT);
+		/*for (int i = 0; i < PHYSICAL_TILE_COUNT * PHYSICAL_TILE_COUNT; i++)
+		{
+			nodeIndicesPerTiles[i].resize(NUM_OF_NODES_PER_TILE);
+		}*/
+
 		sceneRadius = scene.dimensions.radius;
 
 		//models.model.loadFromFile(getAssetPath() + "models/armor/armor.gltf", vulkanDevice, queue, glTFLoadingFlags);
@@ -923,6 +952,7 @@ public:
 			vkCmdSetScissor(drawCmdBuffers[i], 0, 1, &scissor);
 
 			vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets.composition, 0, nullptr);
+			vkCmdBindDescriptorSets(drawCmdBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 1, 1, &descriptorSets.virtualShadowMap, 0, NULL);
 
 			// Final composition as full screen quad
 			// Note: Also used for debug display if debugDisplayTarget > 0
@@ -950,7 +980,7 @@ public:
 		std::vector<VkDescriptorPoolSize> poolSizes = {
 			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 60), // 30
 			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 20),
-			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 10), // 4
+			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 20), // 4
 			vks::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 3)
 			//VK_DESCRIPTOR_TYPE_STORAGE_IMAGE
 		};
@@ -973,7 +1003,9 @@ public:
 			// Binding 4: Fragment shader uniform buffer
 			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, 4),
 			// Binding 5: Shadow map
-			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 5),
+			//vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT, 5),
+			//vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_SHADER_STAGE_FRAGMENT_BIT, 5),
+			//vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, 6),
 		};
 		VkDescriptorSetLayoutCreateInfo descriptorLayout = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
 		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &descriptorSetLayout));
@@ -1004,7 +1036,8 @@ public:
 		VkDescriptorImageInfo texDescriptorShadowMap =
 			vks::initializers::descriptorImageInfo(
 				frameBuffers.shadow->sampler,
-				frameBuffers.shadow->attachments[0].view,
+				//frameBuffers.shadow->attachments[0].view,
+				frameBuffers.shadow->attachments[1].view,
 				VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
 
 		// Deferred composition
@@ -1019,7 +1052,19 @@ public:
 			// Binding 4: Fragment shader uniform buffer
 			vks::initializers::writeDescriptorSet(descriptorSets.composition, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4, &uniformBuffers.composition.descriptor),
 			// Binding 5: Shadow map
-			vks::initializers::writeDescriptorSet(descriptorSets.composition, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 5, &texDescriptorShadowMap),
+			//vks::initializers::writeDescriptorSet(descriptorSets.composition, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 5, &texDescriptorShadowMap),
+
+			/*vks::initializers::writeDescriptorSet(
+				descriptorSets.composition,
+				VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+				5,
+				&textureComputeTarget.descriptor),
+			vks::initializers::writeDescriptorSet(
+				descriptorSets.composition,
+				VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+				6,
+				&virtualTileTableBuffer.descriptor),*/
+
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(writeDescriptorSets.size()), writeDescriptorSets.data(), 0, nullptr);
 
@@ -1463,34 +1508,36 @@ public:
 			//cpp struct¡¯s size rounded up to a multiple of a vec4 (= 16 bytes)
 		};
 
-		VkDeviceSize storageBufferSize4 = 0;
-		if (!scene.nodesAABB.empty())
+		if (enablePerTileFrustumCulling)
 		{
-			storageBufferSize4 = scene.nodesAABB.size() * sizeof(NodeMinMaxTmp);
+			VkDeviceSize storageBufferSize4 = 0;
+			if (!scene.nodesAABB.empty())
+			{
+				storageBufferSize4 = scene.nodesAABB.size() * sizeof(NodeMinMaxTmp);
 
-			vks::Buffer stagingBuffer4;
+				vks::Buffer stagingBuffer4;
 
-			vulkanDevice->createBuffer(
-				VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-				&stagingBuffer4,
-				storageBufferSize4,
-				scene.nodesAABB.data());
+				vulkanDevice->createBuffer(
+					VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+					VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+					&stagingBuffer4,
+					storageBufferSize4,
+					scene.nodesAABB.data());
 
-			vulkanDevice->createBuffer(
-				// The SSBO will be used as a storage buffer for the compute pipeline
-				VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-				&nodesAABBBuffer,
-				storageBufferSize4,
-				false);
+				vulkanDevice->createBuffer(
+					// The SSBO will be used as a storage buffer for the compute pipeline
+					VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+					VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+					&nodesAABBBuffer,
+					storageBufferSize4,
+					false);
 
-			vulkanDevice->copyBuffer(&stagingBuffer4, &nodesAABBBuffer, queue);
+				vulkanDevice->copyBuffer(&stagingBuffer4, &nodesAABBBuffer, queue);
 
-			stagingBuffer4.destroy();
-		}
-		
-		// VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+				stagingBuffer4.destroy();
+			}
+
+			// VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
 		// readback this visible nodes buffer
 		// the size of this buffer?
 
@@ -1505,30 +1552,35 @@ public:
 			PHYSICAL_TILE_COUNT * PHYSICAL_TILE_COUNT * NUM_OF_NODES_PER_TILE * sizeof(int),
 			asyncQueueFamilyIndices));*/
 
-		//NUM_OF_NODES__PER_TILES
-		//scene.nodesAABB.size() * sizeof(int)
+			//NUM_OF_NODES__PER_TILES
+			//scene.nodesAABB.size() * sizeof(int)
 
-		VK_CHECK_RESULT(vulkanDevice->createBuffer(
-			VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-			&visibleNodesIndexBuffer,
-			PHYSICAL_TILE_COUNT* PHYSICAL_TILE_COUNT* NUM_OF_NODES_PER_TILE * sizeof(int)));
+			VK_CHECK_RESULT(vulkanDevice->createBuffer(
+				VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+				&visibleNodesIndexBuffer,
+				PHYSICAL_TILE_COUNT* PHYSICAL_TILE_COUNT* scene.nodesAABB.size() * sizeof(uint32_t)));
+
+			// all the nodes are visible to every frustum
+			//PHYSICAL_TILE_COUNT * PHYSICAL_TILE_COUNT * scene.nodesAABB.size() * sizeof(uint32_t)
 
 
-		// Map for host access
-		VK_CHECK_RESULT(visibleNodesIndexBuffer.map());
+			// Map for host access
+			VK_CHECK_RESULT(visibleNodesIndexBuffer.map());
 
-		//visibleNodesCounter
-		visibleNodesCounter.atomicCounter = 0;
-		VK_CHECK_RESULT(vulkanDevice->createBuffer(
-			VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-			&visibleNodesCountBuffer,
-			sizeof(visibleNodesCounter),
-			nullptr));
+			//visibleNodesCounter
+			visibleNodesCounter.atomicCounter = 0;
+			VK_CHECK_RESULT(vulkanDevice->createBuffer(
+				VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+				&visibleNodesCountBuffer,
+				sizeof(visibleNodesCounter),
+				nullptr));
 
-		// Map for host access
-		VK_CHECK_RESULT(visibleNodesCountBuffer.map());
+			// Map for host access
+			VK_CHECK_RESULT(visibleNodesCountBuffer.map());
+		}
+		
 	}
 
 	void prepareComputeMarkUsedVirtualTiles()
@@ -1999,8 +2051,11 @@ public:
 		preparePreparePhysicalTiles();
 		buildPreparePhysicalTilesCommandBuffer();
 
-		prepareComputeFrustumCulling();
-		buildFrustumCullingCommandBuffer();
+		if (enablePerTileFrustumCulling)
+		{
+			prepareComputeFrustumCulling();
+			buildFrustumCullingCommandBuffer();
+		}
 
 		buildShadowMapCommandBuffer();
 		//----virtual shadowmap----
@@ -2059,6 +2114,8 @@ public:
 			// submit compute work of computePreparePhysicalTiles
 			VK_CHECK_RESULT(vkQueueSubmit(computePreparePhysicalTiles.queue, 1, &computeSubmitInfo, VK_NULL_HANDLE));
 
+			//memcpy(&usedVirtualTileCounter, usedVirualTileCountBuffer.mapped, sizeof(usedVirtualTileCounter));
+
 			//computePerTileFrustumCulling
 			if (enablePerTileFrustumCulling)
 			{
@@ -2088,10 +2145,25 @@ public:
 
 			//visibleNodesCounter
 			memcpy(&visibleNodesCounter, visibleNodesCountBuffer.mapped, sizeof(visibleNodesCounter));
-			memcpy(&culledNodeIndexes[0], (int*)visibleNodesIndexBuffer.mapped, scene.nodesAABB.size() * sizeof(int));
+			memcpy(&culledNodeIndexes[0], (uint32_t*)visibleNodesIndexBuffer.mapped, PHYSICAL_TILE_COUNT * PHYSICAL_TILE_COUNT * scene.nodesAABB.size() * sizeof(uint32_t));
+			//usedVirtualTileCounter.atomicCounter * sizeof(uint32_t)
 			// memcpy std::vector
 			// 1. allocate space for culledNodeIndexes
 			// 2. &culledNodeIndexes[0] : address of the first element
+
+			if (!culledNodeIndexes.empty())
+			{
+				for (uint32_t i : culledNodeIndexes)
+				{
+					if (i != 0)
+					{
+						int tileIndex = (i >> 8) & 0xFF;
+						int nodeIndex = i & 0xFF;
+						//nodeIndicesPerTiles[tileIndex].push_back(nodeIndex);
+						nodeIndicesPerTiles[tileIndex].insert(nodeIndex);
+					}
+				}
+			}
 		}
 
 		// shadowmap physical image rendering

@@ -3,11 +3,32 @@
 layout (set = 0, binding = 1) uniform sampler2D samplerposition;
 layout (set = 0, binding = 2) uniform sampler2D samplerNormal;
 layout (set = 0, binding = 3) uniform sampler2D samplerAlbedo;
-layout (set = 0, binding = 5) uniform sampler2DArray samplerShadowMap;
+//layout (set = 0, binding = 5) uniform sampler2DArray samplerShadowMap;
+
+#define TILE_COUNT 16
+
+layout (set = 1, binding = 0) buffer VirtualTileTable
+{
+	int count;
+	int id[TILE_COUNT * TILE_COUNT];
+} table;
+
+//layout (set = 1, binding = 2, rgba8ui) uniform uimage2D PhysicalImage;
+layout (set = 1, binding = 2, r32ui) uniform uimage2D PhysicalImage;
+
+// layout (set = 0, binding = 5, r32ui) uniform uimage2D PhysicalImage;
+// layout (set = 0, binding = 6) buffer VirtualTileTable
+// {
+// 	int count;
+// 	int id[TILE_COUNT * TILE_COUNT];
+// } table;
 
 layout (location = 0) in vec2 inUV;
 
 layout (location = 0) out vec4 outFragColor;
+
+#define PHYSICAL_TILE_COUNT 8
+#define TILE_SIZE 128
 
 #define LIGHT_COUNT 1
 #define SHADOW_FACTOR 0.25
@@ -38,7 +59,7 @@ float textureProj(vec4 P, float layer, vec2 offset)
 	
 	if (shadowCoord.z > -1.0 && shadowCoord.z < 1.0) 
 	{
-		float dist = texture(samplerShadowMap, vec3(shadowCoord.st + offset, layer)).r;
+		float dist = 0.0f; //texture(samplerShadowMap, vec3(shadowCoord.st + offset, layer)).r;
 		if (shadowCoord.w > 0.0 && dist < shadowCoord.z) 
 		{
 			shadow = SHADOW_FACTOR;
@@ -49,25 +70,26 @@ float textureProj(vec4 P, float layer, vec2 offset)
 
 float filterPCF(vec4 sc, float layer)
 {
-	ivec2 texDim = textureSize(samplerShadowMap, 0).xy;
-	float scale = 1.5;
-	float dx = scale * 1.0 / float(texDim.x);
-	float dy = scale * 1.0 / float(texDim.y);
+	// ivec2 texDim = textureSize(samplerShadowMap, 0).xy;
+	// float scale = 1.5;
+	// float dx = scale * 1.0 / float(texDim.x);
+	// float dy = scale * 1.0 / float(texDim.y);
 
-	float shadowFactor = 0.0;
-	int count = 0;
-	int range = 1;
+	// float shadowFactor = 0.0;
+	// int count = 0;
+	// int range = 1;
 	
-	for (int x = -range; x <= range; x++)
-	{
-		for (int y = -range; y <= range; y++)
-		{
-			shadowFactor += textureProj(sc, layer, vec2(dx*x, dy*y));
-			count++;
-		}
+	// for (int x = -range; x <= range; x++)
+	// {
+	// 	for (int y = -range; y <= range; y++)
+	// 	{
+	// 		shadowFactor += textureProj(sc, layer, vec2(dx*x, dy*y));
+	// 		count++;
+	// 	}
 	
-	}
-	return shadowFactor / count;
+	// }
+	// return shadowFactor / count;
+	return 0.0;
 }
 
 vec3 shadow(vec3 fragcolor, vec3 fragpos) {
@@ -76,11 +98,60 @@ vec3 shadow(vec3 fragcolor, vec3 fragpos) {
 		vec4 shadowClip	= ubo.lights[i].viewMatrix * vec4(fragpos, 1.0);
 
 		float shadowFactor;
-		#ifdef USE_PCF
-			shadowFactor= filterPCF(shadowClip, i);
-		#else
-			shadowFactor = textureProj(shadowClip, i, vec2(0.0));
-		#endif
+		//#ifdef USE_PCF
+		//	shadowFactor= filterPCF(shadowClip, i);
+		//#else
+		//	shadowFactor = textureProj(shadowClip, i, vec2(0.0));
+		//#endif
+		vec4 shadowCoord = shadowClip / shadowClip.w;
+	    shadowCoord.st = shadowCoord.st * 0.5 + 0.5;
+
+		// clip range check
+		bool bShaodwInClip = shadowCoord.w > 0.0f && 
+        (shadowCoord.x >= -1.0f && shadowCoord.x <= 1.0f) &&
+        (shadowCoord.y >= -1.0f && shadowCoord.y <= 1.0f) &&
+        (shadowCoord.z >=  0.0f && shadowCoord.z <= 1.0f);
+    	if(!bShaodwInClip)
+    	{
+        	return fragcolor;
+     	}
+	
+		if (bShaodwInClip) 
+		{
+			float indexTmp = floor(shadowCoord.y * TILE_COUNT) * TILE_COUNT + floor(shadowCoord.x * TILE_COUNT);
+    
+    		//GLSL casting a float to an int automatically floors it (at least in any implementation I've ever seen)
+    		int index = int(indexTmp);
+    		//debugPrintfEXT("index = %d\n", index);
+    		// == or >=?
+    		if (index >= TILE_COUNT * TILE_COUNT)
+    		{
+        		// uvShadow.y == 1.0f
+        		return fragcolor;
+    		}
+
+    		int targetID = table.id[index];
+    		//debugPrintfEXT("index = %d and targetID = %d\n", index, targetID);
+
+    		int offsetX = targetID % PHYSICAL_TILE_COUNT;
+    		int offsetY = targetID / PHYSICAL_TILE_COUNT;
+
+    		int imageOffsetX = offsetX * TILE_SIZE;
+    		int imageOffsetY = offsetY * TILE_SIZE;
+
+			int tileOffsetX = int(gl_FragCoord.x / TILE_SIZE);
+    		int tileOffsetY = int(gl_FragCoord.y / TILE_SIZE);
+
+    		ivec2 P = ivec2(imageOffsetX + tileOffsetX, imageOffsetY + tileOffsetY);
+			uvec4 shadowDepthVec4 = imageLoad(PhysicalImage, P);
+			float shadowDepth = uintBitsToFloat(shadowDepthVec4.x);
+
+			// reverse depth in shadowmap
+			if (shadowDepth > shadowCoord.z)
+			{
+				shadowFactor = SHADOW_FACTOR;
+			}
+		}
 
 		fragcolor *= shadowFactor;
 	}
@@ -162,7 +233,7 @@ void main()
 	// Shadow calculations in a separate pass
 	if (ubo.useShadows > 0)
 	{
-		//fragcolor = shadow(fragcolor, fragPos);
+		fragcolor = shadow(fragcolor, fragPos);
 	}
 
 	outFragColor = vec4(fragcolor, 1.0);

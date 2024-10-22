@@ -15,14 +15,14 @@ layout (set = 1, binding = 0) buffer VirtualTileTable
 	int id[TILE_COUNT * TILE_COUNT];
 } table;
 
-//layout (set = 1, binding = 2, rgba8ui) uniform uimage2D PhyscialImage;
-layout (set = 1, binding = 2, r32ui) uniform uimage2D PhyscialImage;
+//layout (set = 1, binding = 2, rgba8ui) uniform uimage2D PhysicalImage;
+layout (set = 1, binding = 2, r32ui) uniform uimage2D PhysicalImage;
 
 void main()
 {
 	// gl_FragDepth = gl_FragCoord.z;
     //ivec2 P2 = ivec2(gl_FragCoord.xy);
-    //imageAtomicMax(PhyscialImage, P2, 250);
+    //imageAtomicMax(PhysicalImage, P2, 250);
     //return;
 
     float indexTmp = floor(inShadowUV.y * TILE_COUNT) * TILE_COUNT + floor(inShadowUV.x * TILE_COUNT);
@@ -57,12 +57,12 @@ void main()
     uint fragDepth = floatBitsToUint(gl_FragCoord.z);
     //debugPrintfEXT("fragDepth = %d\n", fragDepth);
 
-    //result of PhyscialImage is all zero !
-    // init value of PhyscialImage? imageAtomicMin(0, depth) = 0
+    //result of PhysicalImage is all zero !
+    // init value of PhysicalImage? imageAtomicMin(0, depth) = 0
 
-    imageAtomicMax(PhyscialImage, P, fragDepth);
-    //imageAtomicMax(PhyscialImage, P, 250);
-    //imageAtomicMin(PhyscialImage, P, fragDepth);
+    imageAtomicMax(PhysicalImage, P, fragDepth);
+    //imageAtomicMax(PhysicalImage, P, 250);
+    //imageAtomicMin(PhysicalImage, P, fragDepth);
     // Shader requires fragmentStoresAndAtomics but is not enabled on the device
 
 }
