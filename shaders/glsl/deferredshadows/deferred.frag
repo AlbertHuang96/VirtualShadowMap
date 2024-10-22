@@ -1,5 +1,7 @@
 #version 450
 
+#extension GL_EXT_debug_printf : enable
+
 layout (set = 0, binding = 1) uniform sampler2D samplerposition;
 layout (set = 0, binding = 2) uniform sampler2D samplerNormal;
 layout (set = 0, binding = 3) uniform sampler2D samplerAlbedo;
@@ -131,7 +133,7 @@ vec3 shadow(vec3 fragcolor, vec3 fragpos) {
     		}
 
     		int targetID = table.id[index];
-    		//debugPrintfEXT("index = %d and targetID = %d\n", index, targetID);
+    		debugPrintfEXT("index = %d and targetID = %d\n", index, targetID);
 
     		int offsetX = targetID % PHYSICAL_TILE_COUNT;
     		int offsetY = targetID / PHYSICAL_TILE_COUNT;
@@ -145,6 +147,7 @@ vec3 shadow(vec3 fragcolor, vec3 fragpos) {
     		ivec2 P = ivec2(imageOffsetX + tileOffsetX, imageOffsetY + tileOffsetY);
 			uvec4 shadowDepthVec4 = imageLoad(PhysicalImage, P);
 			float shadowDepth = uintBitsToFloat(shadowDepthVec4.x);
+			debugPrintfEXT("shadowDepth = %f\n", shadowDepth);
 
 			// reverse depth in shadowmap
 			if (shadowDepth > shadowCoord.z)
@@ -153,7 +156,8 @@ vec3 shadow(vec3 fragcolor, vec3 fragpos) {
 			}
 		}
 
-		fragcolor *= shadowFactor;
+		//fragcolor *= shadowFactor;
+		fragcolor = vec3(1, 1, 1);
 	}
 	return fragcolor;
 }

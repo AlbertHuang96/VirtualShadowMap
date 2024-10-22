@@ -54,9 +54,14 @@ public:
 	float zNear = 0.1f;
 	float zFar = 64.0f;
 
+	// reverse depth
+	//1. reverse depth for deferred shading; the mrt depth buffer
+	//2. reverse depth for shadow map
+
 	//lightFOV 
 	float lightFOV = 100.0f;
 
+	
 	// Depth bias (and slope) are used to avoid shadowing artifacts
 	float depthBiasConstant = 1.25f;
 	float depthBiasSlope = 1.75f;
@@ -268,6 +273,10 @@ public:
 #endif
 		camera.position = { 2.15f, 0.3f, -8.75f };
 		camera.setRotation(glm::vec3(-0.75f, 12.5f, 0.0f));
+		// zNear/zFar: distance to the near/far clipping planes (always positive)
+		// reverse depth for the defered shading mrt depth buffer
+		//camera.setPerspective(60.0f, (float)width / (float)height, zFar, zNear);
+		// its distance not coord so no need to swap
 		camera.setPerspective(60.0f, (float)width / (float)height, zNear, zFar);
 		timerSpeed *= 0.25f;
 
@@ -569,7 +578,9 @@ public:
 		//frameBuffers.shadow->width frameBuffers.shadow->height
 
 		clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
-		clearValues[1].depthStencil = { 1.0f, 0 };
+		//reverse depth for shadow map
+		//clearValues[1].depthStencil = { 1.0f, 0 };
+		clearValues[1].depthStencil = { 0.0f, 0 };
 
 		renderPassBeginInfo.renderPass = frameBuffers.shadow->renderPass;
 		renderPassBeginInfo.framebuffer = frameBuffers.shadow->framebuffer;
@@ -585,7 +596,9 @@ public:
 
 		//TILE_DIM
 		//viewport = vks::initializers::viewport((float)frameBuffers.shadow->width, (float)frameBuffers.shadow->height, 0.0f, 1.0f);
-		viewport = vks::initializers::viewport((float)TILE_DIM, (float)TILE_DIM, 0.0f, 1.0f);
+		//reverse depth for shadow map
+		viewport = vks::initializers::viewport((float)TILE_DIM, (float)TILE_DIM, 1.0f, 0.0f);
+		//viewport = vks::initializers::viewport((float)TILE_DIM, (float)TILE_DIM, 0.0f, 1.0f);
 		vkCmdSetViewport(shadowmapCmdBuffer, 0, 1, &viewport);
 
 		//scissor = vks::initializers::rect2D(frameBuffers.shadow->width, frameBuffers.shadow->height, 0, 0);
@@ -664,7 +677,10 @@ public:
 		clearValues[0].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
 		clearValues[1].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
 		clearValues[2].color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
-		clearValues[3].depthStencil = { 1.0f, 0 };
+
+		// reverse depth for the mrt depth buffer
+		//clearValues[3].depthStencil = { 1.0f, 0 };
+		clearValues[3].depthStencil = { 0.0f, 0 };
 
 		renderPassBeginInfo.renderPass = frameBuffers.deferred->renderPass;
 		renderPassBeginInfo.framebuffer = frameBuffers.deferred->framebuffer;
@@ -677,7 +693,11 @@ public:
 
 		vkCmdBeginRenderPass(offScreenCmdBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-		viewport = vks::initializers::viewport((float)frameBuffers.deferred->width, (float)frameBuffers.deferred->height, 0.0f, 1.0f);
+		// reverse depth for the mrt depth buffer
+		//https://docs.vulkan.org/guide/latest/depth.html
+		//Despite their names, minDepth can be less than, equal to, or greater than maxDepth
+		viewport = vks::initializers::viewport((float)frameBuffers.deferred->width, (float)frameBuffers.deferred->height, 1.0f, 0.0f);
+		//viewport = vks::initializers::viewport((float)frameBuffers.deferred->width, (float)frameBuffers.deferred->height, 0.0f, 1.0f);
 		vkCmdSetViewport(offScreenCmdBuffer, 0, 1, &viewport);
 
 		scissor = vks::initializers::rect2D(frameBuffers.deferred->width, frameBuffers.deferred->height, 0, 0);
@@ -1211,6 +1231,8 @@ public:
 		// Vertex input state from glTF model for pipeline rendering models
 		pipelineCI.pVertexInputState = vkglTF::Vertex::getPipelineVertexInputState({ vkglTF::VertexComponent::Position, vkglTF::VertexComponent::UV, vkglTF::VertexComponent::Color, vkglTF::VertexComponent::Normal, vkglTF::VertexComponent::Tangent });
 		rasterizationState.cullMode = VK_CULL_MODE_BACK_BIT;
+		//rasterizationState.cullMode = VK_CULL_MODE_FRONT_BIT;
+		//rasterizationState.frontFace = VK_FRONT_FACE_CLOCKWISE;
 
 		// Offscreen pipeline
 		// Separate render pass
@@ -1227,6 +1249,9 @@ public:
 		};
 		colorBlendState.attachmentCount = static_cast<uint32_t>(blendAttachmentStates.size());
 		colorBlendState.pAttachments = blendAttachmentStates.data();
+
+		// reverse depth for the mrt depth buffer
+		depthStencilState.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;
 
 		shaderStages[0] = loadShader(getShadersPath() + "deferredshadows/mrt.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
 		shaderStages[1] = loadShader(getShadersPath() + "deferredshadows/mrt.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
@@ -1358,6 +1383,7 @@ public:
 			// 
 			//tmp otho proj and the shadows should be parallel
 			glm::mat4 shadowProj = glm::ortho(-sceneRadius, sceneRadius, -sceneRadius, sceneRadius, zNear, sceneRadius * 2);
+			//glm::mat4 shadowProj = glm::ortho(-sceneRadius, sceneRadius, -sceneRadius, sceneRadius, sceneRadius * 2, zNear);
 
 			glm::mat4 shadowView = glm::lookAt(glm::vec3(uniformDataComposition.lights[i].position), glm::vec3(uniformDataComposition.lights[i].target), glm::vec3(0.0f, 1.0f, 0.0f));
 			glm::mat4 shadowModel = glm::mat4(1.0f);
