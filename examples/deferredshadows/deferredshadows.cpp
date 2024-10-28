@@ -126,6 +126,7 @@ public:
 	} uniformDataComputeScene;
 
 	struct {
+		vks::Buffer ubSceneComputeShadowView;
 		vks::Buffer ubSceneCompute;
 		vks::Buffer offscreen;
 		vks::Buffer composition;
@@ -160,6 +161,7 @@ public:
 
 	vks::Buffer virtualTileFlagBuffer;
 	vks::Buffer virtualTileTableBuffer;
+	vks::Buffer tileOffsetTableBuffer;
 
 	vks::Buffer usedVirtualTileMatrixBuffer;
 
@@ -203,6 +205,11 @@ public:
 	{
 		glm::mat4 virtualTileViewProj;
 	};
+
+	struct TileOffset
+	{
+		uint32_t tileOffset;
+	} tileOffset;
 
 	struct {
 		VkQueue queue;								// Separate queue for compute commands (queue family may differ from the one used for graphics)
@@ -276,7 +283,7 @@ public:
 		// zNear/zFar: distance to the near/far clipping planes (always positive)
 		// reverse depth for the defered shading mrt depth buffer
 		//camera.setPerspective(60.0f, (float)width / (float)height, zFar, zNear);
-		// its distance not coord so no need to swap
+		// its the distance not coord so no need to swap
 		camera.setPerspective(60.0f, (float)width / (float)height, zNear, zFar);
 		timerSpeed *= 0.25f;
 
@@ -1145,7 +1152,7 @@ public:
 			// Binding 2: 
 			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_SHADER_STAGE_FRAGMENT_BIT, 2),
 			// Binding 3:
-
+			vks::initializers::descriptorSetLayoutBinding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_FRAGMENT_BIT, 3),
 		};
 		VkDescriptorSetLayoutCreateInfo descriptorLayout2 = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings2);
 		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout2, nullptr, &descriptorSetLayoutRenderShadowMap));
@@ -1171,6 +1178,11 @@ public:
 				VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
 				2,
 				&textureComputeTarget.descriptor), // storage image
+			vks::initializers::writeDescriptorSet(
+				descriptorSets.virtualShadowMap,
+				VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+				3,
+				&tileOffsetTableBuffer.descriptor),
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(shadowmapDescriptorSets.size()), shadowmapDescriptorSets.data(), 0, NULL);
 	}
@@ -1219,6 +1231,7 @@ public:
 		pipelineCI.stageCount = static_cast<uint32_t>(shaderStages.size());
 		pipelineCI.pStages = shaderStages.data();
 
+		depthStencilState.depthTestEnable = VK_FALSE;
 		// Final fullscreen composition pass pipeline
 		rasterizationState.cullMode = VK_CULL_MODE_FRONT_BIT;
 		shaderStages[0] = loadShader(getShadersPath() + "deferredshadows/deferred.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
@@ -1251,6 +1264,8 @@ public:
 		colorBlendState.pAttachments = blendAttachmentStates.data();
 
 		// reverse depth for the mrt depth buffer
+		depthStencilState.depthTestEnable = VK_TRUE;
+		depthStencilState.depthWriteEnable = VK_TRUE;
 		depthStencilState.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL;
 
 		shaderStages[0] = loadShader(getShadersPath() + "deferredshadows/mrt.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
@@ -1319,6 +1334,8 @@ public:
 		VK_CHECK_RESULT(vulkanDevice->createBuffer(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &uniformBuffers.ubSceneCompute, sizeof(UniformDataCompute0), nullptr));
 		VK_CHECK_RESULT(uniformBuffers.ubSceneCompute.map());
 
+		VK_CHECK_RESULT(vulkanDevice->createBuffer(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, &uniformBuffers.ubSceneComputeShadowView, sizeof(glm::mat4), nullptr));
+		VK_CHECK_RESULT(uniformBuffers.ubSceneComputeShadowView.map());
 	}
 
 	void updateUniformBufferOffscreen()
@@ -1335,6 +1352,7 @@ public:
 		uniformDataComputeScene.camInvViewProj = glm::inverse(camera.matrices.perspective * camera.matrices.view);
 
 		memcpy(uniformBuffers.ubSceneCompute.mapped, &uniformDataComputeScene, sizeof(uniformDataComputeScene));
+
 	}
 
 	Light initLight(glm::vec3 pos, glm::vec3 target, glm::vec3 color)
@@ -1348,7 +1366,10 @@ public:
 
 	void initLights()
 	{
-		uniformDataComposition.lights[0] = initLight(glm::vec3(40.0f, -50.0f, 25.0f), glm::vec3(-2.0f, 0.0f, 0.0f), glm::vec3(1.0f, 0.5f, 0.5f));
+		//scene.dimensions
+		//scene.dimensions.center
+		uniformDataComposition.lights[0] = initLight(glm::vec3(40.0f, -50.0f, 25.0f), scene.dimensions.center, glm::vec3(1.0f, 0.5f, 0.5f));
+		//uniformDataComposition.lights[0] = initLight(glm::vec3(40.0f, -50.0f, 25.0f), glm::vec3(-2.0f, 0.0f, 0.0f), glm::vec3(1.0f, 0.5f, 0.5f));
 		//uniformDataComposition.lights[1] = initLight(glm::vec3(14.0f, -4.0f, 12.0f), glm::vec3(2.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
 		//uniformDataComposition.lights[2] = initLight(glm::vec3(0.0f, -10.0f, 4.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(1.0f, 1.0f, 1.0f));
 	}
@@ -1382,10 +1403,17 @@ public:
 			//glm::mat4 shadowProj = glm::perspective(glm::radians(lightFOV), 1.0f, zNear, zFar);
 			// 
 			//tmp otho proj and the shadows should be parallel
-			glm::mat4 shadowProj = glm::ortho(-sceneRadius, sceneRadius, -sceneRadius, sceneRadius, zNear, sceneRadius * 2);
+			//glm::mat4 shadowProj = glm::ortho(-sceneRadius, sceneRadius, -sceneRadius, sceneRadius, zNear, sceneRadius * 2);
+			//glm::mat4 shadowProj = glm::ortho(-100.0f, 100.0f, -100.0f, 100.0f, zNear, sceneRadius * 2);
+			glm::mat4 shadowProj = glm::ortho(-sceneRadius, sceneRadius, -sceneRadius, sceneRadius, sceneRadius * 2, zNear);
+			// zFar = 200.0f
 			//glm::mat4 shadowProj = glm::ortho(-sceneRadius, sceneRadius, -sceneRadius, sceneRadius, sceneRadius * 2, zNear);
 
-			glm::mat4 shadowView = glm::lookAt(glm::vec3(uniformDataComposition.lights[i].position), glm::vec3(uniformDataComposition.lights[i].target), glm::vec3(0.0f, 1.0f, 0.0f));
+			glm::vec3 dir = glm::normalize(glm::vec3(uniformDataComposition.lights[i].target) - glm::vec3(uniformDataComposition.lights[i].position));
+			//glm::vec3 shadowCamera = glm::vec3(uniformDataComposition.lights[i].target) - dir * sceneRadius * 3.0f;
+			// camera is too far away from the target
+			glm::vec3 shadowCamera = glm::vec3(uniformDataComposition.lights[i].target) + 8.0f * dir;
+			glm::mat4 shadowView = glm::lookAt(shadowCamera, glm::vec3(uniformDataComposition.lights[i].target), glm::vec3(0.0f, 1.0f, 0.0f));
 			glm::mat4 shadowModel = glm::mat4(1.0f);
 
 			uniformDataShadows.proj[i] = shadowProj;
@@ -1395,6 +1423,8 @@ public:
 
 		memcpy(uniformDataShadows.instancePos, uniformDataOffscreen.instancePos, sizeof(UniformDataOffscreen::instancePos));
 		memcpy(uniformBuffers.shadowGeometryShader.mapped, &uniformDataShadows, sizeof(UniformDataShadows));
+
+		memcpy(uniformBuffers.ubSceneComputeShadowView.mapped, &uniformDataShadows.modelView, sizeof(UniformDataShadows::modelView));
 
 		uniformDataComposition.viewPos = glm::vec4(camera.position, 0.0f) * glm::vec4(-1.0f, 1.0f, -1.0f, 1.0f);;
 		uniformDataComposition.debugDisplayTarget = debugDisplayTarget;
@@ -1436,8 +1466,7 @@ public:
 			VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 			&virtualTileFlagBuffer,
-			storageBufferSize,
-			false);
+			storageBufferSize);
 
 		vulkanDevice->copyBuffer(&stagingBuffer, &virtualTileFlagBuffer, queue);
 
@@ -1472,13 +1501,43 @@ public:
 			VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
 			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 			&virtualTileTableBuffer,
-			storageBufferSize3,
-			false);
+			storageBufferSize3);
 
 		vulkanDevice->copyBuffer(&stagingBuffer3, &virtualTileTableBuffer, queue);
 
 		stagingBuffer3.destroy();
 
+		//tileOffsetTableBuffer
+		std::vector<TileOffset> TileBuffer(TILE_COUNT * TILE_COUNT);
+		for (auto& tileOffset : TileBuffer)
+		{
+			tileOffset.tileOffset = 0;
+		}
+
+		VkDeviceSize storageBufferSize4 = TileBuffer.size() * sizeof(TileOffset);
+
+		// Staging
+		// SSBO won't be changed on the host after upload so copy to device local memory
+
+		vks::Buffer stagingBuffer4;
+
+		vulkanDevice->createBuffer(
+			VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			&stagingBuffer4,
+			storageBufferSize4,
+			TileBuffer.data());
+
+		vulkanDevice->createBuffer(
+			// The SSBO will be used as a storage buffer for the graphic pipeline
+			VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+			&tileOffsetTableBuffer,
+			storageBufferSize4);
+
+		vulkanDevice->copyBuffer(&stagingBuffer4, &tileOffsetTableBuffer, queue);
+
+		stagingBuffer4.destroy();
 
 		std::vector<UsedVirtualTileViewProj> matrixBuffer(PHYSICAL_TILE_COUNT * PHYSICAL_TILE_COUNT);
 		for (auto& usedVirtualTileViewProj : matrixBuffer)
@@ -1747,7 +1806,11 @@ public:
 			vks::initializers::descriptorSetLayoutBinding(
 				VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
 				VK_SHADER_STAGE_COMPUTE_BIT,
-				5)
+				5),
+			vks::initializers::descriptorSetLayoutBinding(
+				VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+				VK_SHADER_STAGE_COMPUTE_BIT,
+				6),
 		};
 		VkDescriptorSetLayoutCreateInfo descriptorLayout = vks::initializers::descriptorSetLayoutCreateInfo(setLayoutBindings);
 		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &computePreparePhysicalTiles.descriptorSetLayout));
@@ -1785,7 +1848,12 @@ public:
 				computePreparePhysicalTiles.descriptorSet,
 				VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
 				5,
-				&usedVirualTileCountBuffer.descriptor)
+				&usedVirualTileCountBuffer.descriptor),
+			vks::initializers::writeDescriptorSet(
+				computePreparePhysicalTiles.descriptorSet,
+				VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+				2,
+				&uniformBuffers.ubSceneComputeShadowView.descriptor),
 
 		};
 		vkUpdateDescriptorSets(device, static_cast<uint32_t>(computeWriteDescriptorSets.size()), computeWriteDescriptorSets.data(), 0, NULL);

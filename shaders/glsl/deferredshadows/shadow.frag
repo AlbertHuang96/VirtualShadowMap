@@ -18,6 +18,11 @@ layout (set = 1, binding = 0) buffer VirtualTileTable
 //layout (set = 1, binding = 2, rgba8ui) uniform uimage2D PhysicalImage;
 layout (set = 1, binding = 2, r32ui) uniform uimage2D PhysicalImage;
 
+layout (set = 1, binding = 3) writeonly buffer TileTable
+{
+	uint offsetInfo[TILE_COUNT * TILE_COUNT];
+} tileOffsetTable;
+
 void main()
 {
 	// gl_FragDepth = gl_FragCoord.z;
@@ -38,7 +43,7 @@ void main()
     }
 
     int targetID = table.id[index];
-    debugPrintfEXT("index = %d and targetID = %d\n", index, targetID);
+    //debugPrintfEXT("index = %d and targetID = %d\n", index, targetID);
 
     int offsetX = targetID % PHYSICAL_TILE_COUNT;
     int offsetY = targetID / PHYSICAL_TILE_COUNT;
@@ -49,6 +54,22 @@ void main()
     //gl_FragCoord.x * TILE_SIZE
     int tileOffsetX = int(gl_FragCoord.x);
     int tileOffsetY = int(gl_FragCoord.y);
+    // save in the targetID?
+
+    //[0-1] float   float / int
+    float tileOffsetXNorm = gl_FragCoord.x / float(TILE_SIZE);
+    float tileOffsetYNorm = gl_FragCoord.y / float(TILE_SIZE);
+    uint tileOffsetXUINT = floatBitsToUint(tileOffsetXNorm);
+    uint tileOffsetYUINT = floatBitsToUint(tileOffsetYNorm);
+    // the result may be zeros
+
+    //debugPrintfEXT("index = %d and tileOffsetXUINT = %d and tileOffsetYUINT = %d\n", index, tileOffsetXUINT, tileOffsetYUINT);
+
+    // uint 16bit or 32bit?
+    // 2^16 = 65536
+    // int -> uint?
+    tileOffsetTable.offsetInfo[index] = ((tileOffsetX & 0xff) << 8) | (tileOffsetY & 0xff);
+    //tileOffsetTable.offsetInfo[index] = (tileOffsetXUINT << 24) | (tileOffsetYUINT << 16) | (0xff << 8) | 0xff;
 
     ivec2 P = ivec2(imageOffsetX + tileOffsetX, imageOffsetY + tileOffsetY);
     //debugPrintfEXT("P.x = %d P.y = %d\n", P.x, P.y);

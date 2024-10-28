@@ -1,6 +1,6 @@
 #version 450
 
-#extension GL_EXT_debug_printf : enable
+//#extension GL_EXT_debug_printf : enable
 
 #define LIGHT_COUNT 1
 #define TILE_COUNT 16
@@ -56,6 +56,8 @@ void main()
      }
 
     vec2 uvShadow = 0.5f * (shaodwClipPos.xy + 1.0f);
+    //debugPrintfEXT("uvShadow.x = %f and uvShadow.y = %f\n", uvShadow.x, uvShadow.y);
+    //[0-1] floats
     outShadowUV = uvShadow;
 
     // need to modify
@@ -67,7 +69,7 @@ void main()
     {
         // uvShadow.y == 1.0f
         return;
-     }
+    }
 
     int targetID = table.id[index];
     //debugPrintfEXT("targetID = %d\n", targetID);

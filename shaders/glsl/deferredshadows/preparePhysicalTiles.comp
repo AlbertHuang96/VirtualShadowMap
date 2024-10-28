@@ -69,6 +69,11 @@ layout (binding = 5) buffer UsedVirtualTileCounter
 	int atomicCounter;
 } usedVirtualTileCounter;
 
+layout (binding = 6) uniform uboComputeSceneShadowView
+{
+	mat4 shadowViewMatrix;
+} uboShadowView;
+
 void main()
 {
     ivec2 id = ivec2(gl_GlobalInvocationID.xy);
@@ -156,13 +161,20 @@ void main()
 		float bottom = -ubo.sceneRadius + step * gl_GlobalInvocationID.y;
 		float top = bottom + step;
 
+		// pass in by uniform
+		float zNear = 0.1f;
+		float zFar = 2.0f * ubo.sceneRadius;
+
 		// //mat4 orthoProj
 		// // tiles[index]
-		tiles[count - 1].virtualTileViewProj = mat4(vec4(2 / (right - left), 0, 0, 0),
+		// this is ortho
+		// viewProj = proj * view
+		mat4 orthoProj = mat4(vec4(2 / (right - left), 0, 0, 0),
 												vec4(0, 2 / (top - bottom), 0, 0),
-												vec4(0, 0, -2.0f, 0),
-												vec4(-(right + left) / (right - left), -(top + bottom) / (top - bottom), -1.0f, 1.0f));
+												vec4(0, 0, 1.0f / (zFar - zNear), 0), 
+												vec4(-(right + left) / (right - left), -(top + bottom) / (top - bottom), zFar / (zFar - zNear), 1.0f)); 
 
+		tiles[count - 1].virtualTileViewProj = orthoProj * uboShadowView.shadowViewMatrix;
 		barrier();
 		memoryBarrier();
 

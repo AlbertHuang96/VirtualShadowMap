@@ -53,6 +53,11 @@ layout (set = 0, binding = 4) uniform UBO
 	int debugDisplayTarget;
 } ubo;
 
+layout (set = 1, binding = 3) readonly buffer TileTable
+{
+	uint offsetInfo[TILE_COUNT * TILE_COUNT];
+} tileOffsetTable;
+
 float textureProj(vec4 P, float layer, vec2 offset)
 {
 	float shadow = 1.0;
@@ -98,21 +103,25 @@ vec3 shadow(vec3 fragcolor, vec3 fragpos) {
 	for(int i = 0; i < LIGHT_COUNT; ++i)
 	{
 		vec4 shadowClip	= ubo.lights[i].viewMatrix * vec4(fragpos, 1.0);
+		//debugPrintfEXT("fragpos.x = %f and fragpos.y = %f and fragpos.z = %f\n", fragpos.x, fragpos.y, fragpos.z);
+		//debugPrintfEXT("shadowClip.z = %f and shadowClip.w = %f\n", shadowClip.z, shadowClip.w);
 
-		float shadowFactor;
+		float shadowFactor = 1.0f;
 		//#ifdef USE_PCF
 		//	shadowFactor= filterPCF(shadowClip, i);
 		//#else
 		//	shadowFactor = textureProj(shadowClip, i, vec2(0.0));
 		//#endif
 		vec4 shadowCoord = shadowClip / shadowClip.w;
+		//debugPrintfEXT("shadowCoord.z = %f\n", shadowCoord.z);
+
 	    shadowCoord.st = shadowCoord.st * 0.5 + 0.5;
 
 		// clip range check
 		bool bShaodwInClip = shadowCoord.w > 0.0f && 
         (shadowCoord.x >= -1.0f && shadowCoord.x <= 1.0f) &&
         (shadowCoord.y >= -1.0f && shadowCoord.y <= 1.0f) &&
-        (shadowCoord.z >=  0.0f && shadowCoord.z <= 1.0f);
+        (shadowCoord.z >= 0.0f && shadowCoord.z <= 1.0f);
     	if(!bShaodwInClip)
     	{
         	return fragcolor;
@@ -120,8 +129,14 @@ vec3 shadow(vec3 fragcolor, vec3 fragpos) {
 	
 		if (bShaodwInClip) 
 		{
+			
+			//float / int
+			//int indexX = int(x / TILE_SIZE);
+			//int indexY = int(y / TILE_SIZE);
+			//int index2 = indexY * TILE_COUNT + indexX;
+
 			float indexTmp = floor(shadowCoord.y * TILE_COUNT) * TILE_COUNT + floor(shadowCoord.x * TILE_COUNT);
-    
+    		//debugPrintfEXT("indexTmp = %f and shadowCoord.x = %f and shadowCoord.y = %f and floor(shadowCoord.y * TILE_COUNT) = %f\n", indexTmp, shadowCoord.x, shadowCoord.y, floor(shadowCoord.y * TILE_COUNT));
     		//GLSL casting a float to an int automatically floors it (at least in any implementation I've ever seen)
     		int index = int(indexTmp);
     		//debugPrintfEXT("index = %d\n", index);
@@ -133,7 +148,7 @@ vec3 shadow(vec3 fragcolor, vec3 fragpos) {
     		}
 
     		int targetID = table.id[index];
-    		debugPrintfEXT("index = %d and targetID = %d\n", index, targetID);
+    		//debugPrintfEXT("index = %d and targetID = %d\n", index, targetID);
 
     		int offsetX = targetID % PHYSICAL_TILE_COUNT;
     		int offsetY = targetID / PHYSICAL_TILE_COUNT;
@@ -141,31 +156,67 @@ vec3 shadow(vec3 fragcolor, vec3 fragpos) {
     		int imageOffsetX = offsetX * TILE_SIZE;
     		int imageOffsetY = offsetY * TILE_SIZE;
 
-			int tileOffsetX = int(gl_FragCoord.x / TILE_SIZE);
-    		int tileOffsetY = int(gl_FragCoord.y / TILE_SIZE);
+			// need to modify
+			// need a lookup indirection texture
+			//int tileOffsetX = int(gl_FragCoord.x / TILE_SIZE);
+    		//int tileOffsetY = int(gl_FragCoord.y / TILE_SIZE);
+
+			// heres problem its tile offset 
+			//uint offset = tileOffsetTable.offsetInfo[index];
+			//offset = 65535
+			//uint tileOffsetXTmp = (offset >> 24) & 0xff;
+			//uint tileOffsetYTmp = (offset >> 16) & 0xff;
+
+
+			//float floatTileOffsetX = uintBitsToFloat(tileOffsetXTmp);
+			//float floatTileOffsetY = uintBitsToFloat(tileOffsetYTmp);
+			//int tileOffsetX = int(floatTileOffsetX * TILE_SIZE);
+			//int tileOffsetY = int(floatTileOffsetY * TILE_SIZE);
+
+			// highp int/uint  uint -> int
+			//int tileOffsetX = (int(offset) >> 8) & 0xff;
+			//int tileOffsetY = int(offset) & 0xff;
+
+			float x = shadowCoord.x * TILE_COUNT * TILE_SIZE;
+			float y = shadowCoord.y * TILE_COUNT * TILE_SIZE;
+			//debugPrintfEXT("x = %f and y = %f\n", x, y);
+			//debugPrintfEXT("x = %f and y = %f and x / TILE_SIZE = %d and y / TILE_SIZE = %d\n", x, y, int(x) / (TILE_SIZE), int(y) / (TILE_SIZE));
+			int tileOffsetX = int(x) - TILE_SIZE * (int(x) / (TILE_SIZE));
+			int tileOffsetY = int(y) - TILE_SIZE * (int(y) / (TILE_SIZE));
+			//debugPrintfEXT("x2 = %d and y2 = %d\n", x2, y2);
+			//int tileOffsetX = int(x - x / float(TILE_SIZE));
+			//int tileOffsetY = int(y - y / float(TILE_SIZE));
+			//debugPrintfEXT("tileOffsetX = %d and tileOffsetY = %d\n", tileOffsetX, tileOffsetY);
 
     		ivec2 P = ivec2(imageOffsetX + tileOffsetX, imageOffsetY + tileOffsetY);
+			debugPrintfEXT("P.x = %d and P.y = %d\n", P.x, P.y);
+
 			uvec4 shadowDepthVec4 = imageLoad(PhysicalImage, P);
+
 			float shadowDepth = uintBitsToFloat(shadowDepthVec4.x);
-			debugPrintfEXT("shadowDepth = %f\n", shadowDepth);
+			//debugPrintfEXT("shadowDepth = %f and shadowCoord.z = %f\n", shadowDepth, shadowCoord.z);
 
 			// reverse depth in shadowmap
 			if (shadowDepth > shadowCoord.z)
 			{
+				//debugPrintfEXT("shadowDepth = %f and shadowCoord.z = %f\n", shadowDepth, shadowCoord.z);
 				shadowFactor = SHADOW_FACTOR;
 			}
 		}
 
-		//fragcolor *= shadowFactor;
-		fragcolor = vec3(1, 1, 1);
+		fragcolor *= shadowFactor;
+		
 	}
 	return fragcolor;
 }
 
 void main() 
 {
+	// rasterize area 0-128?
+	//debugPrintfEXT("inUV.x = %f and inUV.y = %f\n", inUV.x, inUV.y);
 	// Get G-Buffer values
 	vec3 fragPos = texture(samplerposition, inUV).rgb;
+	//debugPrintfEXT("fragPos.x = %f and fragPos.y = %f and fragPos.z = %f\n", fragPos.x, fragPos.y, fragPos.z);
 	vec3 normal = texture(samplerNormal, inUV).rgb;
 	vec4 albedo = texture(samplerAlbedo, inUV);
 
@@ -173,7 +224,10 @@ void main()
 	if (ubo.debugDisplayTarget > 0) {
 		switch (ubo.debugDisplayTarget) {
 			case 1: 
-				outFragColor.rgb = shadow(vec3(1.0), fragPos).rgb;
+				//outFragColor.rgb = shadow(vec3(1.0), fragPos).rgb;
+				vec4 shadowClip	= ubo.lights[0].viewMatrix * vec4(fragPos, 1.0);
+				outFragColor.rgb = vec3(shadowClip.xyz);
+				//outFragColor.rgb = vec3(shadowClip.z); //all white if shadowClip.z > 1
 				break;
 			case 2: 
 				outFragColor.rgb = fragPos;

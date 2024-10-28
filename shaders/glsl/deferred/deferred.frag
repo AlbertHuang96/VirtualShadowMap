@@ -1,5 +1,7 @@
 #version 450
 
+#extension GL_EXT_debug_printf : enable
+
 layout (binding = 1) uniform sampler2D samplerposition;
 layout (binding = 2) uniform sampler2D samplerNormal;
 layout (binding = 3) uniform sampler2D samplerAlbedo;
@@ -23,6 +25,7 @@ layout (binding = 4) uniform UBO
 
 void main() 
 {
+	debugPrintfEXT("inUV.x = %f and inUV.y = %f\n", inUV.x, inUV.y);
 	// Get G-Buffer values
 	vec3 fragPos = texture(samplerposition, inUV).rgb;
 	vec3 normal = texture(samplerNormal, inUV).rgb;
